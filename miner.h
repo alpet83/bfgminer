@@ -340,6 +340,10 @@ struct device_drv {
 	void (*queue_flush)(struct thr_info *);
 };
 
+#define MIN(x, y)	((x) > (y) ? (y) : (x))
+#define MAX(x, y)	((x) > (y) ? (x) : (y))
+
+
 enum dev_enable {
 	DEV_ENABLED,
 	DEV_DISABLED,
@@ -407,7 +411,7 @@ struct cgminer_stats {
 struct cgminer_pool_stats {
 	uint32_t getwork_calls;
 	uint32_t getwork_attempts;
-	struct timeval getwork_wait;
+    struct timeval getwork_wait;
 	struct timeval getwork_wait_max;
 	struct timeval getwork_wait_min;
 	double getwork_wait_rolling;
@@ -484,8 +488,13 @@ struct cgpu_info {
 	pthread_cond_t	device_cond;
 
 #ifdef USE_BITFURY
-	int chip_n;
+    int    chip_count;
 	struct bitfury_device devices[200]; // TODO Move somewhere to appropriate place
+ #ifdef PREFETCH_WORKS
+    struct work *prefetch[PREFETCH_WORKS]; // большая очередь заданий
+    int w_prefetch;
+    int r_prefetch;
+ #endif
 #endif
 
 	enum dev_enable deven;
@@ -648,6 +657,7 @@ struct thr_info {
 	bool	work_restart;
 	notifier_t work_restart_notifier;
 };
+
 
 struct string_elist {
 	char *string;
@@ -1338,7 +1348,8 @@ struct work {
 
 	/* Used to queue shares in submit_waiting */
 	struct work *prev;
-	struct work *next;
+    struct work *next;
+
 };
 
 extern void get_datestamp(char *, size_t, time_t);

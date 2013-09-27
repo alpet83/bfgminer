@@ -50,7 +50,7 @@ void _applog(int prio, const char *str)
 #else
 	if (0) {}
 #endif
-	else {
+    else {
 		bool writetocon =
 			(opt_debug_console || (opt_log_output && prio != LOG_DEBUG) || prio <= LOG_NOTICE)
 		 && !(opt_quiet && prio != LOG_ERR);
@@ -60,7 +60,7 @@ void _applog(int prio, const char *str)
 
 		char datetime[64];
 
-		if (opt_log_microseconds)
+        if (1)
 		{
 			struct timeval tv;
 			struct tm tm;
@@ -69,14 +69,14 @@ void _applog(int prio, const char *str)
 			bfg_gettimeofday(&tv);
 			localtime_r(&tv.tv_sec, &tm);
 			
-			snprintf(datetime, sizeof(datetime), "[%d-%02d-%02d %02d:%02d:%02d.%06ld]",
+            snprintf(datetime, sizeof(datetime), "[%d-%02d-%02d %02d:%02d:%02d.%03ld]",
 				tm.tm_year + 1900,
 				tm.tm_mon + 1,
 				tm.tm_mday,
 				tm.tm_hour,
 				tm.tm_min,
 				tm.tm_sec,
-				(long)tv.tv_usec);
+                (long)tv.tv_usec / 1000);
 		}
 		else
 			get_now_datestamp(datetime, sizeof(datetime));

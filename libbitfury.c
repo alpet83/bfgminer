@@ -38,9 +38,11 @@
 #include "sha2.h"
 
 #include <time.h>
+#include "driver-config.h"
 
 #define BITFURY_REFRESH_DELAY 100
 #define BITFURY_DETECT_TRIES 3000 / BITFURY_REFRESH_DELAY
+
 
 // 0 .... 31 bit
 // 1000 0011 0101 0110 1001 1010 1100 0111
@@ -323,7 +325,7 @@ int detect_chip(int chip_n) {
 		if (newbuf[16] != 0 && newbuf[16] != 0xFFFFFFFF) {
 			return 0;
 		}
-		cgsleep_ms(BITFURY_REFRESH_DELAY / 10);
+        nmsleep(BITFURY_REFRESH_DELAY / 10);
 		memcpy(oldbuf, newbuf, 17 * 4);
 	}
 	return 0;
@@ -354,25 +356,56 @@ int libbitfury_detectChips(struct bitfury_device *devices) {
 		int slot_detected = tm_i2c_detect(i) != -1;
 		slot_on[i] = slot_detected;
 		tm_i2c_clear_oe(i);
-		cgsleep_ms(1);
+        nmsleep(1);
 	}
 
-	for (i = 0; i < BITFURY_MAXBANKS; i++) {
-		int chip_n = 0;
-		int chip_detected;
-		tm_i2c_set_oe(i);
-		do {
-			chip_detected = detect_chip(chip_n);
-			if (chip_detected) {
-				applog(LOG_WARNING, "BFY slot: %d, chip #%d detected", i, n);
-				devices[n].slot = i;
-				devices[n].fasync = chip_n;
-				n++;
-				chip_n++;
-			}
-		} while (chip_detected);
-		tm_i2c_clear_oe(i);
-	}
+    for (i = 0; i < BITFURY_MAXBANKS; i++) {
+//		if (slot_on[i]) {
+            int chip_index = 0;
+            int cnt_on_slot = 0;
+            int chip_detected = 0;
+
+            char num_chip[16] = { 0 };
+            char slot_line [1024] = { 0 };
+
+            tm_i2c_set_oe(i);
+            do {
+                strcpy (num_chip, "   ");
+                chip_detected = detect_chip(chip_index);
+
+                if (!chip_detected)
+                {
+                    if (cnt_on_slot) applog(LOG_WARNING, "BITFURY slot: 0x%02X, chip #%X not detected !!!", i, n);
+                    chip_detected = detect_chip(chip_index);
+                }
+
+                if (chip_detected) {
+                    // applog(LOG_WARNING, "BITFURY slot: 0x%02X, chip #%X detected", i, n);
+                    snprintf ( num_chip, 15, "%02X ", chip_index );
+                    devices[n].slot = i;
+                    devices[n].fasync = chip_index;
+                    n++;
+                    cnt_on_slot ++;
+                }
+                else
+                    if (!chip_index) break; // если нулевой чип не найден, то и остальные искать бесполезно на практике
+
+                strncat(slot_line, num_chip, 1023);
+                chip_index++;
+            } while (chip_index < BITFURY_BANKCHIPS);
+
+            if (cnt_on_slot) applog(LOG_WARNING, "BITFURY slot 0x%02X, chips detected: %s = %d", i, slot_line, cnt_on_slot);
+
+#ifdef      BITFURY_METABANK
+            if (cnt_on_slot && cnt_on_slot < BITFURY_BANKCHIPS) {
+                sprintf(slot_line, "For slot %X detected only %d chips from %d", i, cnt_on_slot, BITFURY_BANKCHIPS);
+                quit(1, slot_line);
+            }
+#endif
+
+            tm_i2c_clear_oe(i);
+//		}
+    }
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
 
@@ -419,30 +452,42 @@ int rehash(const void *midstate, const uint32_t m7, const uint32_t ntime, const 
 	static unsigned history[512];
 	static unsigned history_p;
 #endif
-	sha256_ctx ctx;
 
-
-	memset( &ctx, 0, sizeof( sha256_ctx ) );
-	memcpy(ctx.h, mid32, 8*4);
-	ctx.tot_len = 64;
-	ctx.len = 0;
 
 	nnonce = bswap_32(nnonce);
 	in32[0] = bswap_32(m7);
 	in32[1] = bswap_32(ntime);
 	in32[2] = bswap_32(nbits);
 	in32[3] = nnonce;
+#ifdef BFGMINER_MOD
+    sha256_ctx ctx;
+    memset( &ctx, 0, sizeof( sha256_ctx ) );
+    memcpy(ctx.h, mid32, 8*4);
+    ctx.tot_len = 64;
+    ctx.len = 0;
 
 	sha256_update(&ctx, in, 16);
 	sha256_final(&ctx, out);
 	sha256(out, 32, out);
+#else
+    sha2_context ctx;
+    memset( &ctx, 0, sizeof( sha2_context ) );
+    memcpy(ctx.state, mid32, 8*4);
+    ctx.total[0] = 64;
+    ctx.total[1] = 0;
+    sha2_update(&ctx, in, 16);
+    sha2_finish(&ctx, out);
+    sha2(out, 32, out);
+#endif
+
 
 	if (out32[7] == 0) {
 #ifdef BITFURY_REHASH_DEBUG
 		char hex[65];
-		bin2hex(hex, out, 32);
+        char *r = bin2hex(hex, out, 32);
 		applog(LOG_INFO, "! MS0: %08x, m7: %08x, ntime: %08x, nbits: %08x, nnonce: %08x", mid32[0], m7, ntime, nbits, nnonce);
 		applog(LOG_INFO, " out: %s", hex);
+        cfree (r);
 		history[history_p] = nnonce;
 		history_p++; history_p &= 512 - 1;
 #endif
@@ -455,123 +500,136 @@ void work_to_payload(struct bitfury_payload *p, struct work *w) {
 	unsigned char flipped_data[80];
 
 	memset(p, 0, sizeof(struct bitfury_payload));
+#ifdef BFGMINER_MOD
 	swap32yes(flipped_data, w->data, 80 / 4);
-
+#else
+    flip80(flipped_data, w->data);
+#endif
 	memcpy(p->midstate, w->midstate, 32);
 	p->m7 = bswap_32(*(unsigned *)(flipped_data + 64));
 	p->ntime = bswap_32(*(unsigned *)(flipped_data + 68));
 	p->nbits = bswap_32(*(unsigned *)(flipped_data + 72));
 }
 
-void libbitfury_sendHashData(struct thr_info *thr, struct bitfury_device *bf, int chip_n) {
+void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
+    unsigned char *hexstr;
+    unsigned *newbuf = d->newbuf;
+    unsigned *oldbuf = d->oldbuf;
+    struct bitfury_payload *p = &(d->payload);
+    struct bitfury_payload *op = &(d->opayload);
+    struct bitfury_payload *o2p = &(d->o2payload);
+    struct timespec d_time;
+    struct timespec time;
+    int smart = 0;
+    int i;
+    int chip = d->fasync;
+    int slot = d->slot;
+
+    char *txbuff = NULL;
+    char *rxbuff = NULL;
+
+    clock_gettime(CLOCK_REALTIME, &(time));
+
+    if(1) {
+        int i;
+        int results_num = 0;
+        int found = 0;
+        unsigned * results = d->results;
+
+        memcpy(atrvec, p, 20*4);
+        ms3_compute(atrvec);
+
+        /* Programming next value */
+        tm_i2c_set_oe(slot);
+        spi_clear_buf(); spi_emit_break();
+        spi_emit_fasync(chip);
+        spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+        txbuff = spi_gettxbuf();
+        rxbuff = spi_getrxbuf();
+        spi_txrx(txbuff, rxbuff, spi_getbufsz());
+
+        memcpy(newbuf, rxbuff + 4 + chip, 17 * 4); // 16 x nonce + flags (?)
+
+        tm_i2c_clear_oe(slot);
+        d->job_switched = ( newbuf[16] != oldbuf[16] );
+
+        d->old_num = 0;
+        d->future_num = 0;
+        for (i = 0; i < 16; i++) {
+            if (oldbuf[i] != newbuf[i] && op && o2p) {
+                unsigned pn; //possible nonce
+                unsigned int s = 0; //TODO zero may be solution
+                unsigned int old_f = 0;
+                if ((newbuf[i] & 0xFF) == 0xE0)
+                    continue;
+                pn = decnonce(newbuf[i]);
+                if(     rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) s = pn;
+                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00400000)) s = pn - 0x00400000;
+                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00800000)) s = pn - 0x00800000;
+                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02800000)) s = pn + 0x02800000;
+                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x00400000)) s = pn + 0x00400000;
+                if (s) {
+                    results[results_num++] = bswap_32(s);
+                    found++;
+                }
+
+                s = 0;
+                if (    rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn)) s = pn;
+                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00400000)) s = pn - 0x00400000;
+                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00800000)) s = pn - 0x00800000;
+                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02800000)) s = pn + 0x02800000;
+                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x00400000)) s = pn + 0x00400000;
+                if (s) {
+                    d->old_nonce[d->old_num++] = bswap_32(s);
+                    found++;
+                }
+
+                s = 0;
+                if(     rehash(p->midstate, p->m7, p->ntime, p->nbits, pn)) s = pn;
+                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00400000)) s = pn - 0x00400000;
+                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00800000)) s = pn - 0x00800000;
+                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02800000)) s = pn + 0x02800000;
+                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x00400000)) s = pn + 0x00400000;
+                if (s) {
+                    d->future_nonce[d->future_num++] = bswap_32(s);
+                    found++;
+                }
+                // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
+                if (!found && d->csw_back > 3) {
+                    d->hw_errors++;
+#ifdef BFGMINER_MOD
+                    inc_hw_errors2(thr, NULL, &pn);
+#else
+                    inc_hw_errors(thr);
+#endif
+                }
+            }
+        }
+        d->results_n = results_num;
+
+        if (d->job_switched) {
+            memcpy(o2p, op, sizeof(struct bitfury_payload));
+            memcpy(op,  p,  sizeof(struct bitfury_payload));
+            memcpy(oldbuf, newbuf, 17 * 4);
+        }
+    }
+}
+
+
+
+void libbitfury_sendHashData(struct thr_info *thr, struct bitfury_device *bf, int chip_count) {
 	int chip_id;
-	int buf_diff;
+
 	static unsigned second_run;
-	struct timespec d_time;
-	struct timespec time;
 
 //	clock_gettime(CLOCK_REALTIME, &(time));
 
-	for (chip_id = 0; chip_id < chip_n; chip_id++) {
-		unsigned char *hexstr;
-		struct bitfury_device *d = bf + chip_id;
-		unsigned *newbuf = d->newbuf;
-		unsigned *oldbuf = d->oldbuf;
-		struct bitfury_payload *p = &(d->payload);
-		struct bitfury_payload *op = &(d->opayload);
-		struct bitfury_payload *o2p = &(d->o2payload);
-		struct timespec d_time;
-		struct timespec time;
-		int smart = 0;
-		int i;
-		int chip = d->fasync;
-		int slot = d->slot;
-
-
-		clock_gettime(CLOCK_REALTIME, &(time));
-
-		if(1) {
-			int i;
-			int results_num = 0;
-			int found = 0;
-			unsigned * results = d->results;
-
-			memcpy(atrvec, p, 20*4);
-			ms3_compute(atrvec);
-
-			/* Programming next value */
-			tm_i2c_set_oe(slot);
-			spi_clear_buf(); spi_emit_break();
-			spi_emit_fasync(chip);
-			spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
-
-			spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
-			memcpy(newbuf, spi_getrxbuf() + 4 + chip, 17*4);
-			tm_i2c_clear_oe(slot);
-
-			d->job_switched = (newbuf[16] != oldbuf[16]);
-
-			d->old_num = 0;
-			d->future_num = 0;
-			for (i = 0; i < 16; i++) {
-				if (oldbuf[i] != newbuf[i] && op && o2p) {
-					unsigned pn; //possible nonce
-					unsigned int s = 0; //TODO zero may be solution
-					unsigned int old_f = 0;
-					if ((newbuf[i] & 0xFF) == 0xE0)
-						continue;
-					pn = decnonce(newbuf[i]);
-					if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) s = pn;
-					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00400000)) s = pn - 0x00400000;
-					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00800000)) s = pn - 0x00800000;
-					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02800000)) s = pn + 0x02800000;
-					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x00400000)) s = pn + 0x00400000;
-					if (s) {
-						results[results_num++] = bswap_32(s);
-						found++;
-					}
-
-					s = 0;
-					if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn)) s = pn;
-					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00400000)) s = pn - 0x00400000;
-					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00800000)) s = pn - 0x00800000;
-					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02800000)) s = pn + 0x02800000;
-					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x00400000)) s = pn + 0x00400000;
-					if (s) {
-						d->old_nonce[d->old_num++] = bswap_32(s);
-						found++;
-					}
-
-					s = 0;
-					if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn)) s = pn;
-					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00400000)) s = pn - 0x00400000;
-					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00800000)) s = pn - 0x00800000;
-					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02800000)) s = pn + 0x02800000;
-					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x00400000)) s = pn + 0x00400000;
-					if (s) {
-						d->future_nonce[d->future_num++] = bswap_32(s);
-						found++;
-					}
-					if (!found) {
-						d->hw_errors++;
-						inc_hw_errors2(thr, NULL, &pn);
-					}
-				}
-			}
-			d->results_n = results_num;
-
-			if (d->job_switched) {
-				memcpy(o2p, op, sizeof(struct bitfury_payload));
-				memcpy(op, p, sizeof(struct bitfury_payload));
-				memcpy(oldbuf, newbuf, 17 * 4);
-			}
-		}
-	}
+    for (chip_id = 0; chip_id < chip_count; chip_id++)
+        libbitfury_sendHashOne (thr, &bf[chip_id]);
 	second_run = 1;
-
 	return;
 }
 
