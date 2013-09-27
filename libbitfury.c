@@ -516,7 +516,7 @@ inline unsigned rehash_test(struct bitfury_device *d, struct bitfury_payload *op
     pn += offset;
     bool result = rehash(op->midstate, op->m7, op->ntime, op->nbits, pn);
 
-    if (result && offset) {
+    if ( result && offset && 0 == offset & 0x80000000 ) {
         applog(LOG_WARNING, "found solution for chip %X:%X, offset = 0x%X ", d->fasync, d->slot, offset);
     }
 
@@ -533,7 +533,9 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
     struct bitfury_payload *o2p = &(d->o2payload);
     struct timespec d_time;
     struct timespec time;
-    unsigned offsets [6] = { 0, 0xFF400000, 0xFF800000, 0x02800000, 0x02C00000, 0x00400000 };
+
+#define TEST_OFFSETS 3
+    unsigned offsets [6] = { 0, 0xFF800000, 0xFFC00000, 0x02800000, 0x02C00000, 0x00400000 };
 
     int smart = 0;
     int i;
@@ -581,7 +583,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
                     continue;
                 pn = decnonce(newbuf[i]);
 
-                for (n = 0; n < 6 && 0 == s; n ++) {
+                for (n = 0; n < TEST_OFFSETS && 0 == s; n ++) {
                     s = rehash_test(d, op, pn, offsets[n] );
                 }
 
@@ -591,7 +593,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
                     s = 0;
                 }
 
-                for (n = 0; n < 6 && 0 == s; n ++) {
+                for (n = 0; n < TEST_OFFSETS && 0 == s; n ++) {
                     s = rehash_test(d, o2p, pn, offsets[n] );
                 }
 
@@ -601,7 +603,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
                     s = 0;
                 }
 
-                for (n = 0; n < 6 && 0 == s; n ++) {
+                for (n = 0; n < TEST_OFFSETS && 0 == s; n ++) {
                     s = rehash_test(d, p, pn, offsets[n] );
                 }
 
