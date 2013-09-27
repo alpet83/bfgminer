@@ -598,7 +598,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
                     found++;
                 }
                 // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
-                if (!found && d->csw_back > 3) {
+                if (!found && d->csw_back > 1) {
                     d->hw_errors++;
 #ifdef BFGMINER_MOD
                     inc_hw_errors2(thr, NULL, &pn);

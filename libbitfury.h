@@ -119,6 +119,7 @@ struct bitfury_device {
     struct timeval   rst_time;        // reset time: когда устройство сбрасывалось последний раз
 
 	unsigned int matching_work;
+    unsigned int works_shifted;       // сколько заданий сдвинуто за последний цикл
 	unsigned int nonces[32];
 	int current_nonce;
 	double gh_stat[8];

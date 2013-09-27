@@ -330,11 +330,20 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
     applog(LOG_WARNING, "loading opt configuration from %s ", filename);
 
     int lcount = 0;
+    int base_bits = BASE_OSC_BITS;
 
     while ( ! feof(fcfg) ) {
         char line [1024] = { 0 };
         fgets (line, 1024, fcfg);
-        char *s = strstr(line, "slot_");
+
+        char *s = strstr(line, "base_bits=");
+        if (s) {
+            if (1 == sscanf(s, "base_bits=%d", base_bits))
+                applog(LOG_WARNING, "base_bits loaded from config = %d", base_bits);
+            continue;
+        }
+
+        s = strstr(line, "slot_");
         if ( !s ) continue;
         lcount ++;
 
@@ -513,107 +522,6 @@ static bool bitfury_fill(struct cgpu_info *cgpu) {
 
 #endif
 
-uint64_t works_receive(thr_info_t *thr, bitfury_device_t *devices, int chip_count) {
-
-    uint64_t hashes = 0;
-    struct timeval now;
-
-
-    int chip;
-
-    for (chip = 0;chip < chip_count; chip++) {
-        int nonces_cnt = 0;
-        bitfury_device_p dev = &devices[chip];
-
-        if (dev->job_switched && dev->work) {
-            int j;
-            int *res = dev->results;
-            struct work *work = dev->work;
-            struct work *owork = dev->owork;
-            struct work *o2work = dev->o2work;
-            cgtime(&now);
-
-            // новое задание - считается - закончено?
-            // work=>>owork=>>o2work
-
-            /*
-             *
-            for (j = dev->results_n - 1; j >= 0; j--) {
-                if (owork) {
-                    nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
-                }
-                if (o2work) {
-                    // TEST
-                    //submit_nonce(thr, owork, bswap_32(res[j]));
-                }
-            }
-
-
-            dev->results_n = 0;
-            dev->job_switched = 0;
-            if (dev->old_nonce && o2work)
-                nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce));
-
-            if (dev->future_nonce)
-                nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce));
-
-            if (o2work) {
-                work_completed(thr->cgpu, o2work);
-                double diff = tv_diff (&now, &dev->work_start);
-                dev->work_end = now;
-
-                if (dev->work_median == 0)
-                    dev->work_median = diff;
-                else
-                    dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
-            }
-            */
-
-            for (j = dev->results_n-1; j >= 0; j--) {
-                if (owork) {
-                    nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
-                }
-            }
-            dev->results_n = 0;
-            dev->job_switched = 0;
-            if ((dev->old_num > 0) && o2work)
-                for(j = 0; j < dev->old_num; j++) {
-                    nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce[j]));
-                }
-
-            if (dev->future_num > 0)
-                for(j=0; j < dev->future_num; j++) {
-                        nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce[j]));
-                }
-
-            if (o2work) {
-                work_completed(thr->cgpu, o2work);
-                double diff = tv_diff (&now, &dev->work_start);
-                dev->work_end = now;
-
-                if (dev->work_median == 0)
-                    dev->work_median = diff;
-                else
-                    dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
-            }
-
-
-            // сдвиг миниочереди
-            dev->o2work = dev->owork;
-            dev->owork = dev->work;
-            dev->work = NULL;
-            hashes += 0xffffffffull * nonces_cnt;
-            dev->matching_work += nonces_cnt;
-            test_reclock(dev); // думаю здесь самое лучшее место, чтобы чип перенастроить на другую частоту
-        }
-    }
-    return hashes;
-}
-
-
-
-
-
 int work_push(cgpu_info_t *cgpu, bitfury_device_p dev) {
     dev->job_switched = 0;
     if ( dev->work == NULL )
@@ -646,6 +554,115 @@ int work_push(cgpu_info_t *cgpu, bitfury_device_p dev) {
     }
     return 1;
 }
+
+
+inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
+
+    if (dev->job_switched && dev->work); else return 0;
+
+    //
+    struct timeval now;
+    int nonces_cnt = 0;
+
+
+    int j;
+    int *res = dev->results;
+    struct work *work = dev->work;
+    struct work *owork = dev->owork;
+    struct work *o2work = dev->o2work;
+    cgtime(&now);
+
+    // новое задание - считается - закончено?
+    // work=>>owork=>>o2work
+
+    /*
+         *
+        for (j = dev->results_n - 1; j >= 0; j--) {
+            if (owork) {
+                nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
+            }
+            if (o2work) {
+                // TEST
+                //submit_nonce(thr, owork, bswap_32(res[j]));
+            }
+        }
+
+
+        dev->results_n = 0;
+        dev->job_switched = 0;
+        if (dev->old_nonce && o2work)
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce));
+
+        if (dev->future_nonce)
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce));
+
+        if (o2work) {
+            work_completed(thr->cgpu, o2work);
+            double diff = tv_diff (&now, &dev->work_start);
+            dev->work_end = now;
+
+            if (dev->work_median == 0)
+                dev->work_median = diff;
+            else
+                dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
+        }
+        */
+
+    for (j = dev->results_n-1; j >= 0; j--) {
+        if (owork) {
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
+        }
+    }
+    dev->results_n = 0;
+    dev->job_switched = 0;
+    if ((dev->old_num > 0) && o2work)
+        for(j = 0; j < dev->old_num; j++) {
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce[j]));
+        }
+
+    if (dev->future_num > 0)
+        for(j=0; j < dev->future_num; j++) {
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce[j]));
+        }
+
+    if (o2work) {
+        work_completed(thr->cgpu, o2work);
+        double diff = tv_diff (&now, &dev->work_start);
+        dev->work_end = now;
+
+        if (dev->work_median == 0)
+            dev->work_median = diff;
+        else
+            dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
+    }
+
+
+    // сдвиг миниочереди
+    dev->o2work = dev->owork;
+    dev->owork = dev->work;
+    dev->work = NULL;
+
+    dev->works_shifted ++;     // для перестановки задания в конец живой очереди
+    dev->matching_work += nonces_cnt;
+    test_reclock(dev); // думаю здесь самое лучшее место, чтобы чип перенастроить на другую частоту
+    work_push(thr->cgpu, dev);   // это всего-лишь попытка, возможно неудачная!
+    return 0xffffffffull * nonces_cnt;
+
+}
+
+uint64_t works_receive(thr_info_t *thr, bitfury_device_t *devices, int chip_count) {
+    uint64_t hashes = 0;
+    int chip;
+    for (chip = 0;chip < chip_count; chip++)
+        hashes += work_receive (thr, &devices[chip]);
+
+    return hashes;
+}
+
+
+
+
+
 
 
 int works_push(cgpu_info_t *cgpu) {
@@ -720,11 +737,10 @@ void dump_chip_eff (bitfury_device_p dev, int ridx) {
     char buff[16384];
     // get_datestamp ( buff, 100, get_cgtime() );
     format_time ( get_cgtime(), buff );
-
     char filename[PATH_MAX];
     strcpy(filename, "/var/log/bitfury/");
     mkdir(filename, 0777);
-    size_t l = strlen(filename);
+    l = strlen(filename);
     snprintf(filename + l, PATH_MAX - l, "slot%X_chip%X.log", dev->slot, dev->fasync);
 
     buff[0] = 0;
@@ -901,7 +917,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     if ( loop < 15 ) {
 
         if ( loop > 13  && dev->work_median > 0 )
-            snprintf(s_line + len, STAT_LINE_LENGTH - len, "%3.0f @%5.2f%%| ", alt_gh * 10, 100 * dev->work_wait / dev->work_median ); // speed from work-time, wait time
+            snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2d @%5.2f%%| ", dev->osc6_bits, 100 * dev->work_wait / dev->work_median ); // speed from work-time, wait time
         else
             snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2s%2d -%5.1f | ", cl_tag, rr, dev->hw_rate ); // speed and errors
     }
@@ -979,7 +995,7 @@ static int64_t try_scanHash(thr_info_t *thr)
 
     static bitfury_device_t *devices, *dev; // TODO Move somewhere to appropriate place
     int chip_count;
-    int chip;
+    int chip, i;
     uint64_t hashes = 0;
     static struct timeval now;
     static struct timeval last_call;
@@ -999,21 +1015,26 @@ static int64_t try_scanHash(thr_info_t *thr)
     double now_mcs = 0;
     double load_mcs = 0;
 
+    static unsigned busy_count = 0;
+    static unsigned ready_count = 0;
 
+    loops_count ++;
+    call_count ++;
 
     static char debug_log[1024] = { 0 };
     static int active_slot = 0;
     static char *chips_in_slot[BITFURY_MAXBANKS] = { 0 };
 
-
-    int i;
-
-    loops_count ++;
-    call_count ++;
-
-
     devices = thr->cgpu->devices;
     chip_count = thr->cgpu->chip_count;
+#define USE_LIVE_ORDER
+#ifdef  USE_LIVE_ORDER
+    static bitfury_device_p live_devs[BITFURY_MAXCHIPS] = { NULL };
+    // в первый цикл заполнить по порядку
+    for (i = 0; 1 == loops_count && i < chip_count; i ++  )
+         live_devs[i] = &devices[i];
+#endif
+
     cgtime(&now);
 
 
@@ -1041,25 +1062,66 @@ static int64_t try_scanHash(thr_info_t *thr)
     cgtime(&last_call);
 
     // hashes += works_receive(thr, devices, chip_count);
-
     works_push (thr->cgpu);
 
 #ifdef BITFURY_HARD_LOAD
     libbitfury_sendHashData(thr, devices, chip_count);
+    hashes += works_receive(thr, devices, chip_count);
 #else
-    for (i = 0; i < chip_count; i ++)
-        if ( devices[i].slot == active_slot )
-             libbitfury_sendHashOne (thr, &devices[i]);
-#endif
+ #ifdef USE_LIVE_ORDER
+    int tmp;
+    for (tmp = 0; tmp < 10; tmp ++) {
+        libbitfury_sendHashOne (thr, live_devs[0]); // 3-5ms load
+        hashes += work_receive (thr, live_devs[0]);
 
+
+        bitfury_device_p ld = live_devs[0];
+
+        if (ld->works_shifted)
+            ready_count ++;
+        else
+            busy_count ++;
+
+        // !стратегия - поощряет лучшие чипы, ставя их ближе к началу очереди (ну или в середину).
+        //  стратегия - поощряет плохие чипы...
+
+        if ( !ld->works_shifted ) {
+            // сдвиг всей очереди, запихивание "добитого" в конец
+            int last = chip_count - 1;
+            for ( i = 0; i < last; i ++)
+                live_devs[i] = live_devs[i + 1];
+            live_devs[last] = ld;
+        }
+        else {
+            int near = chip_count / 2;
+
+            // сдвиг части очереди, запихивание "недобитого" поближе
+            for ( i = 0; i < near; i ++)
+                // last iter.:  [half - 1] = [half]
+                live_devs[i] = live_devs[i + 1];
+
+            live_devs[near] = ld;
+            ld->works_shifted = 0;
+
+        }
+    } // for tmp
+ #else
+
+    for (i = 0; i < chip_count; i ++)
+        if ( devices[i].slot == active_slot ) {
+             libbitfury_sendHashOne (thr, &devices[i]);
+             hashes += work_receive (thr, &devices[i]);
+        }
     // выбор другого активного слота (!)
     do {
         active_slot ++;
         if (active_slot >= BITFURY_MAXBANKS)
             active_slot = 0;
     } while ( !chips_in_slot[active_slot] );
+ #endif
+#endif
 
-    hashes += works_receive(thr, devices, chip_count);
+
     cgtime(&now);
     now_mcs = tv2mcs (&now);
 
@@ -1176,7 +1238,8 @@ static int64_t try_scanHash(thr_info_t *thr)
         printf("\e[37;40m\r");
 
 
-        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, seconds to long stat %5d, median_load = %.1f ", ghsm_saldo, long_stat - elapsed, median_load * 0.001  );
+        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, seconds to long stat %5d, median_load = %.1f ms, busy = %7d, ready = %7d ",
+                                ghsm_saldo, long_stat - elapsed, median_load * 0.001, busy_count, ready_count );
         applog(LOG_WARNING, line);
         // malloc_stats();
 #endif
@@ -1245,7 +1308,7 @@ static int64_t bitfury_scanHash(thr_info_t *thr) {
      } while (hashes && result < 50); // */
 
      // загружать X мс полезной работой - теоретически меньше будет режиков.
-#define WORK_FRAME 200
+
 
      double start_mcs = tv2mcs( get_cgtime() ) ;
      double elapsed = 0;
@@ -1254,8 +1317,10 @@ static int64_t bitfury_scanHash(thr_info_t *thr) {
          result += try_scanHash(thr);
          elapsed = tv2mcs( get_cgtime() ) - start_mcs;
      } while ( elapsed < WORK_FRAME * 1000 );
-#ifdef BFGMINER_MOD
-     nmsleep (1);
+
+     int ms = 1;
+#ifdef BFGMINER_MOD     
+     nmsleep (ms);
 #else
      nmsleep (1);
      // if ( 0 == result ) nmsleep ( BITFURY_SCANHASH_DELAY - (int)time_ms ); // strict loop time

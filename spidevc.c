@@ -35,11 +35,17 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #include <sys/stat.h>
+#include "bitfury-config.h"
 
 static volatile unsigned *gpio;
 static int fd;
 
-static int mode = 0, bits = 8, speed = 500000;
+static int mode = 0, bits = 8;
+#ifdef BITFURY_METABANK
+static int speed = 1000000;
+#else
+static int speed = 4000000;
+#endif
 
 
 void spi_init(void)
