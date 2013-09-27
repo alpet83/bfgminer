@@ -81,6 +81,8 @@ struct tm g_time;
 
 int shares_first, shares_last, shares_total;
 int stat_dumps = 0;
+int base_bits = BASE_OSC_BITS;
+
 
 // Forward declarations
 static void bitfury_disable(thr_info_t* thr);
@@ -108,7 +110,7 @@ timeval_p get_cgtime() {
 void format_time(timeval_p tv, char *datetime) {
     struct tm *tm;
     if (NULL == tv) {
-        get_cgtime();
+        tv = get_cgtime();
         tm = &g_time;
     }
     else {
@@ -344,7 +346,7 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
     applog(LOG_WARNING, "loading opt configuration from %s ", filename);
 
     int lcount = 0;
-    int base_bits = BASE_OSC_BITS;
+
 
     while ( ! feof(fcfg) ) {
         char line [1024] = { 0 };
@@ -397,7 +399,7 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
                     for (i = 0; i < 4; i ++)
                         if ( best < v[i] ) {
                              best = v[i];
-                             dev->osc6_bits_upd = BASE_OSC_BITS + i;
+                             dev->osc6_bits_upd = base_bits + i;
                         }
                }
             }
@@ -425,6 +427,9 @@ void save_opt_conf (bitfury_device_t *devices, int chip_count) {
     int i;
     int last_slot = devices[0].slot;
     char line[1024] = { 0 };
+
+    if (base_bits != BASE_OSC_BITS)
+        fprintf(fcfg, "base_bits=%d", base_bits);
 
     for (i = 0; i < chip_count; i ++) {
         bitfury_device_p dev = &devices[i];
