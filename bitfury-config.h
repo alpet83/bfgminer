@@ -29,6 +29,7 @@
 /* Select your type of hardware */
 
 #define BITFURY_METABANK 1
+
 // #define BITFURY_NEEDBMW_NOMUX 1
 
 

@@ -45,6 +45,13 @@
 #define GOLDEN_BACKLOG 5
 #define STAT_LINE_LENGTH 1024
 
+#ifdef BITFURY_METABANK
+// print temperature and vCore for slots
+#define BITFURY_MONITORING
+#endif
+
+
+
 typedef struct thr_info thr_info_t;
 typedef struct timeval timeval_t;
 typedef struct cgpu_info cgpu_info_t;

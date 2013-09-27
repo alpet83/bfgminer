@@ -1,7 +1,7 @@
 #ifndef __DRIVER_CONFIG_H__
 #define __DRIVER_CONFIG_H__
 
-// здесь контролируется производительность и статистика driver-bitfury
+// here controlled stats and performance driver-bitfury
 
 #define BITFURY_ENABLE_LONG_STAT 1
 #define BITFURY_ENABLE_SHORT_STAT 1
@@ -11,8 +11,12 @@
 // #define CGMINER_MOD
 
 // #define FAST_CLOCK1
+
+// processing all chips every cycle (remains about 500ms)
 #define BITFURY_HARD_LOAD
-#define BITFURY_MONITORING
+
+// print by chip stats in log files in /var/log/bitfury
+// #define BITFURY_CHIP_STAT
 
 #ifdef BFGMINER_MOD
 #define nmsleep cgsleep_ms
