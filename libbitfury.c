@@ -511,6 +511,19 @@ void work_to_payload(struct bitfury_payload *p, struct work *w) {
 	p->nbits = bswap_32(*(unsigned *)(flipped_data + 72));
 }
 
+inline unsigned rehash_test(struct bitfury_device *d, struct bitfury_payload *op, unsigned pn, unsigned offset) {
+
+    pn += offset;
+    bool result = rehash(op->midstate, op->m7, op->ntime, op->nbits, pn);
+
+    if (result && offset) {
+        applog(LOG_WARNING, "found solution for chip %X:%X, offset = 0x%X ", d->fasync, d->slot, offset);
+    }
+
+    return result ? pn : 0;
+
+}
+
 void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
     unsigned char *hexstr;
     unsigned *newbuf = d->newbuf;
@@ -520,6 +533,8 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
     struct bitfury_payload *o2p = &(d->o2payload);
     struct timespec d_time;
     struct timespec time;
+    unsigned offsets [6] = { 0, 0xFF400000, 0xFF800000, 0x02800000, 0x02C00000, 0x00400000 };
+
     int smart = 0;
     int i;
     int chip = d->fasync;
@@ -535,14 +550,15 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
         int results_num = 0;
         int found = 0;
         unsigned * results = d->results;
+        tm_i2c_set_oe(slot);
 
         memcpy(atrvec, p, 20*4);
         ms3_compute(atrvec);
 
         /* Programming next value */
-        tm_i2c_set_oe(slot);
-        spi_clear_buf(); spi_emit_break();
+        spi_clear_buf(); spi_emit_break();        
         spi_emit_fasync(chip);
+        nusleep(100);
         spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
         txbuff = spi_gettxbuf();
         rxbuff = spi_getrxbuf();
@@ -557,12 +573,45 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
         d->future_num = 0;
         for (i = 0; i < 16; i++) {
             if (oldbuf[i] != newbuf[i] && op && o2p) {
+                int n;
                 unsigned pn; //possible nonce
-                unsigned int s = 0; //TODO zero may be solution
+                unsigned int s = 0; //TODO zero may be solution                
                 unsigned int old_f = 0;
                 if ((newbuf[i] & 0xFF) == 0xE0)
                     continue;
                 pn = decnonce(newbuf[i]);
+
+                for (n = 0; n < 6 && 0 == s; n ++) {
+                    s = rehash_test(d, op, pn, offsets[n] );
+                }
+
+                if (s) {
+                    results[results_num++] = bswap_32(s);
+                    found++;
+                    s = 0;
+                }
+
+                for (n = 0; n < 6 && 0 == s; n ++) {
+                    s = rehash_test(d, o2p, pn, offsets[n] );
+                }
+
+                if (s) {
+                    d->old_nonce[d->old_num++] = bswap_32(s);
+                    found++;
+                    s = 0;
+                }
+
+                for (n = 0; n < 6 && 0 == s; n ++) {
+                    s = rehash_test(d, p, pn, offsets[n] );
+                }
+
+                if (s) {
+                    d->future_nonce[d->future_num++] = bswap_32(s);
+                    found++;
+                }
+
+
+                /*
                 if(     rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) s = pn;
                 else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00400000)) s = pn - 0x00400000;
                 else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00800000)) s = pn - 0x00800000;
@@ -597,8 +646,9 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
                     d->future_nonce[d->future_num++] = bswap_32(s);
                     found++;
                 }
+                // */
                 // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
-                if (!found && d->csw_back > 1) {
+                if (found < 3 && d->csw_back > 1) {
                     d->hw_errors++;
 #ifdef BFGMINER_MOD
                     inc_hw_errors2(thr, NULL, &pn);

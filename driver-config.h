@@ -21,6 +21,7 @@
 
 #ifdef BFGMINER_MOD
 #define nmsleep cgsleep_ms
+#define nusleep cgsleep_us
 #endif
 
 #ifdef FAST_CLOCK1

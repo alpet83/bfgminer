@@ -99,7 +99,7 @@ inline double tv2mcs(struct timeval *tv) {
 timeval_p get_cgtime() {
     static timeval_t now;
     cgtime(&now);
-    localtime_r(&now.tv_sec, &g_time);
+    memcpy (&g_time, localtime(&now.tv_sec), sizeof(g_time));
     return &now;
 }
 
@@ -1095,7 +1095,7 @@ static int64_t try_scanHash(thr_info_t *thr)
         else
             busy_count ++;
 
-        // nmsleep (1);
+        nusleep (500);
         // !стратегия - поощряет лучшие чипы, ставя их ближе к началу очереди (ну или в середину).
         //  стратегия - поощряет плохие чипы... и в конце-концов будет много HW, тотальный сброс и прочее
 
