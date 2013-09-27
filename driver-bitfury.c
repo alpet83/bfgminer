@@ -94,14 +94,28 @@ inline double tv2mcs(struct timeval *tv) {
 }
 
 
+timeval_p get_cgtime() {
+    static timeval_t now;
+    cgtime(&now);
+    localtime_r(&now.tv_sec, &g_time);
+    return &now;
+}
+
+
 #ifdef BFGMINER_MOD
 // alternative form for get_datestamp
 // duplicated in logging.c
 void format_time(timeval_p tv, char *datetime) {
-
-    const time_t tmp_time = tv->tv_sec;
     struct tm *tm;
-    tm = localtime(&tmp_time);
+    if (NULL == tv) {
+        get_cgtime();
+        tm = &g_time;
+    }
+    else {
+
+        const time_t tmp_time = tv->tv_sec;
+        tm = localtime(&tmp_time);
+    }
     sprintf(datetime, " [%d-%02d-%02d %02d:%02d:%02d.%03d] ",
         tm->tm_year + 1900,
         tm->tm_mon + 1,
@@ -440,12 +454,6 @@ void save_opt_conf (bitfury_device_t *devices, int chip_count) {
 }
 
 
-struct timeval* get_cgtime() {
-    static struct timeval now;
-    cgtime(&now);
-    localtime_r(&now.tv_sec, &g_time);
-    return &now;
-}
 
 
 #ifdef PREFETCH_WORKS
@@ -736,14 +744,12 @@ void dump_chip_eff (bitfury_device_p dev, int ridx) {
 #ifdef BITFURY_CHIP_STAT
     char buff[16384];
     // get_datestamp ( buff, 100, get_cgtime() );
-    format_time ( get_cgtime(), buff );
+    format_time ( NULL, buff );
     char filename[PATH_MAX];
     strcpy(filename, "/var/log/bitfury/");
     mkdir(filename, 0777);
     l = strlen(filename);
     snprintf(filename + l, PATH_MAX - l, "slot%X_chip%X.log", dev->slot, dev->fasync);
-
-    buff[0] = 0;
 
     static char last_hour = 0;
     FILE *f;
