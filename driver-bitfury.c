@@ -76,7 +76,7 @@ static char CL_LT_YELLOW[] = "\e[1;33m";
 static char CL_LT_BLUE[]   = "\e[1;34m";
 static char CL_LT_CYAN[]   = "\e[1;36m";
 static char CL_LT_WHITE[]  = "\e[1;37m";
-struct tm g_time;
+static struct tm g_time;
 
 
 int shares_first, shares_last, shares_total;
@@ -109,15 +109,18 @@ timeval_p get_cgtime() {
 // duplicated in logging.c
 void format_time(timeval_p tv, char *datetime) {
     struct tm *tm;
-    if (NULL == tv) {
-        tv = get_cgtime();
-        tm = &g_time;
-    }
-    else {
 
-        const time_t tmp_time = tv->tv_sec;
-        tm = localtime(&tmp_time);
+    if (NULL == tv) {
+        static timeval_t now;
+        bfg_init_time();
+        bfg_gettimeofday(&now);
+        tv = &now;
     }
+
+
+    const time_t tmp_time = tv->tv_sec;
+    tm = localtime(&tmp_time);
+
     sprintf(datetime, " [%d-%02d-%02d %02d:%02d:%02d.%03d] ",
         tm->tm_year + 1900,
         tm->tm_mon + 1,
@@ -148,6 +151,7 @@ static void bitfury_detect(void)
     int chip_count;
     int i;
     struct cgpu_info *bitfury_info;
+
 
     signal(SIGSEGV, sig_handler);
     signal(SIGILL, sig_handler);
@@ -755,7 +759,6 @@ void dump_chip_eff (bitfury_device_p dev, int ridx) {
     mkdir(filename, 0777);
     l = strlen(filename);
     snprintf(filename + l, PATH_MAX - l, "slot%X_chip%X.log", dev->slot, dev->fasync);
-
     static char last_hour = 0;
     FILE *f;
 
@@ -772,6 +775,7 @@ void dump_chip_eff (bitfury_device_p dev, int ridx) {
     }
 
     fprintf(f, "%s --------------------- \n", buff);
+    buff [0] = 0; // prepare for histogram
     dump_histogram ( stat, buff, 16384 );
     fprintf(f, "%s", buff);
     fprintf(f, "osc6_bits = %d, eff_speed = %.2f Gh/s, hw_rate = %.1f%% \n", BASE_OSC_BITS + ridx, dev->eff_speed, dev->hw_rate);
@@ -1084,8 +1088,6 @@ static int64_t try_scanHash(thr_info_t *thr)
     for (tmp = 0; tmp < 10; tmp ++) {
         libbitfury_sendHashOne (thr, live_devs[0]); // 3-5ms load
         hashes += work_receive (thr, live_devs[0]);
-
-
         bitfury_device_p ld = live_devs[0];
 
         if (ld->works_shifted)
@@ -1093,8 +1095,9 @@ static int64_t try_scanHash(thr_info_t *thr)
         else
             busy_count ++;
 
+        // nmsleep (1);
         // !стратегия - поощряет лучшие чипы, ставя их ближе к началу очереди (ну или в середину).
-        //  стратегия - поощряет плохие чипы...
+        //  стратегия - поощряет плохие чипы... и в конце-концов будет много HW, тотальный сброс и прочее
 
         if ( !ld->works_shifted ) {
             // сдвиг всей очереди, запихивание "добитого" в конец
@@ -1330,7 +1333,7 @@ static int64_t bitfury_scanHash(thr_info_t *thr) {
      } while ( elapsed < WORK_FRAME * 1000 );
 
      int ms = 1;
-#ifdef BFGMINER_MOD     
+#ifdef BFGMINER_MOD
      nmsleep (ms);
 #else
      nmsleep (1);
