@@ -81,7 +81,7 @@ static struct tm g_time;
 
 int shares_first, shares_last, shares_total;
 int stat_dumps = 0;
-int base_bits = BASE_OSC_BITS;
+int slot_base_bits [BITFURY_MAXBANKS] = { BASE_OSC_BITS };
 
 
 // Forward declarations
@@ -351,6 +351,8 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
 
     int lcount = 0;
 
+    int base_bits = BASE_OSC_BITS;
+
 
     while ( ! feof(fcfg) ) {
         char line [1024] = { 0 };
@@ -358,7 +360,7 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
 
         char *s = strstr(line, "base_bits=");
         if (s) {
-            if (1 == sscanf(s, "base_bits=%d", base_bits))
+            if (1 == sscanf(s, "base_bits=%d", &base_bits))
                 applog(LOG_WARNING, "base_bits loaded from config = %d", base_bits);
             continue;
         }
@@ -384,6 +386,12 @@ void load_opt_conf (bitfury_device_t *devices, int chip_count) {
             applog(LOG_WARNING, "parsing error at slot number detect");
             continue;
         }
+
+        if (!base_bits)
+            base_bits = BASE_OSC_BITS;
+
+        slot_base_bits[n_slot] = base_bits;
+
 
         t = strtok(NULL, ";");
         while (t && strlen(t) > 10 ) {
@@ -429,17 +437,20 @@ void save_opt_conf (bitfury_device_t *devices, int chip_count) {
 
     fcfg = fopen(filename, "w");
     int i;
-    int last_slot = devices[0].slot;
+    int last_slot = -1;
     char line[1024] = { 0 };
 
-    if (base_bits != BASE_OSC_BITS)
-        fprintf(fcfg, "base_bits=%d", base_bits);
 
     for (i = 0; i < chip_count; i ++) {
         bitfury_device_p dev = &devices[i];
 
         if (dev->slot != last_slot) {
-            fprintf(fcfg, "slot_%X=%s\n", last_slot, line);
+            int bits = slot_base_bits[dev->slot];
+            if (bits)
+                fprintf(fcfg, "base_bits=%d\n", bits);
+
+            if (strlen(line))
+                fprintf(fcfg, "slot_%X=%s\n", last_slot, line);
             last_slot = dev->slot;
             line[0] = 0;
         }
@@ -661,6 +672,7 @@ inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
 
     dev->works_shifted ++;     // для перестановки задания в конец живой очереди
     dev->matching_work += nonces_cnt;
+    dev->found_last = 0;
     test_reclock(dev); // думаю здесь самое лучшее место, чтобы чип перенастроить на другую частоту
     work_push(thr->cgpu, dev);   // это всего-лишь попытка, возможно неудачная!
     return 0xffffffffull * nonces_cnt;
@@ -920,8 +932,15 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     dev->rbc_stat[ridx] = ghash;
 
     char *cl_tag = " ";
-    if ( ghash >= 3 ) cl_tag = " +";
-    if ( ghash >= 4 ) cl_tag = "++";
+
+
+    if ( ghash <= 2.0 ) cl_tag = " -";
+    if ( ghash <= 1.5 ) cl_tag = "--";
+    if ( ghash <= 1.0 ) cl_tag = " !";
+    if ( ghash <= 0.5 ) cl_tag = "!!";
+
+    if ( ghash >= 3.0 ) cl_tag = " +";
+    if ( ghash >= 4.0 ) cl_tag = "++";
 
     int rr = ghash2int (ghash);
     chips_by_rate [rr] ++;      // не более chip_count сумма по всем массиву быть должна
@@ -932,7 +951,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     if ( loop < 15 ) {
 
         if ( loop > 13  && dev->work_median > 0 )
-            snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2d @%5.2f%%| ", dev->osc6_bits, 100 * dev->work_wait / dev->work_median ); // speed from work-time, wait time
+            snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2.0f @ @%2d | ", 10 * alt_gh, dev->osc6_bits ); // speed from work-time, wait time
         else
             snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2s%2d -%5.1f | ", cl_tag, rr, dev->hw_rate ); // speed and errors
     }
@@ -1029,7 +1048,7 @@ static int64_t try_scanHash(thr_info_t *thr)
     double elps_mcs = 0;
     double now_mcs = 0;
     double load_mcs = 0;
-
+    static int interval = 0;
     static unsigned busy_count = 0;
     static unsigned ready_count = 0;
 
@@ -1087,17 +1106,13 @@ static int64_t try_scanHash(thr_info_t *thr)
     int tmp;
     for (tmp = 0; tmp < 10; tmp ++) {
         libbitfury_sendHashOne (thr, live_devs[0]); // 3-5ms load
-        hashes += work_receive (thr, live_devs[0]);
+        uint64_t recv = work_receive (thr, live_devs[0]);
+        hashes += recv;
         bitfury_device_p ld = live_devs[0];
 
-        if (ld->works_shifted)
-            ready_count ++;
-        else
-            busy_count ++;
-
-        nusleep (500);
+        nusleep (interval);
         // !стратегия - поощряет лучшие чипы, ставя их ближе к началу очереди (ну или в середину).
-        //  стратегия - поощряет плохие чипы... и в конце-концов будет много HW, тотальный сброс и прочее
+        //  стратегия - поощряет плохие чипы...
 
         if ( !ld->works_shifted ) {
             // сдвиг всей очереди, запихивание "добитого" в конец
@@ -1115,9 +1130,19 @@ static int64_t try_scanHash(thr_info_t *thr)
                 live_devs[i] = live_devs[i + 1];
 
             live_devs[near] = ld;
-            ld->works_shifted = 0;
 
         }
+
+        if (ld->works_shifted) {
+
+            ld->works_shifted = 0;
+            // if (recv) libbitfury_sendHashOne (thr, live_devs[0]); // 3-5ms load
+
+            ready_count ++;
+        }
+        else
+            busy_count ++;
+
     } // for tmp
  #else
 
@@ -1125,6 +1150,7 @@ static int64_t try_scanHash(thr_info_t *thr)
         if ( devices[i].slot == active_slot ) {
              libbitfury_sendHashOne (thr, &devices[i]);
              hashes += work_receive (thr, &devices[i]);
+             nusleep (interval);
         }
     // выбор другого активного слота (!)
     do {
@@ -1191,8 +1217,11 @@ static int64_t try_scanHash(thr_info_t *thr)
         }
 
 
-        if (maskv == 15)
+        if (maskv == 15) {
             save_opt_conf(devices, chip_count);
+            interval += 100;
+            if (interval > 1500) interval = 0;
+        }
 
 #ifdef BITFURY_ENABLE_SHORT_STAT
         // printing histogram
@@ -1252,8 +1281,8 @@ static int64_t try_scanHash(thr_info_t *thr)
         printf("\e[37;40m\r");
 
 
-        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, seconds to long stat %5d, median_load = %.1f ms, busy = %7d, ready = %7d ",
-                                ghsm_saldo, long_stat - elapsed, median_load * 0.001, busy_count, ready_count );
+        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, interval = %d mcs, seconds to long stat %5d, median_load = %.1f ms, busy = %7d, ready = %7d ",
+                                ghsm_saldo, interval, long_stat - elapsed, median_load * 0.001, busy_count, ready_count );
         applog(LOG_WARNING, line);
         // malloc_stats();
 #endif

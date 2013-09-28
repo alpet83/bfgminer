@@ -118,8 +118,9 @@ struct bitfury_device {
     int              csw_count;       // clock switch count: сколько раз сменялась частота принудительно
     struct timeval   rst_time;        // reset time: когда устройство сбрасывалось последний раз
 
-	unsigned int matching_work;
+	unsigned int matching_work;    
     unsigned int works_shifted;       // сколько заданий сдвинуто за последний цикл
+    unsigned int found_last;
 	unsigned int nonces[32];
 	int current_nonce;
 	double gh_stat[8];
