@@ -900,7 +900,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
         // sprintf(stat_lines[n_slot], "[%X] T:%3.0f | V: %4.0f %4.0f| ", n_slot, slot_temp, slot_vc0, slot_vc1);
         // sprintf(s_line, "[%X] T:%3.0f | V: %4.2f %4.2f| ", n_slot, slot_temp, slot_vc0 / 1000, slot_vc1 / 1000);
         // вывод температуры бесполезен для плат Метабанка, значение практически не связанно с уровнем нагрева чипов.
-        sprintf(s_line, "[%X] V: %4.2f %4.2f| ", n_slot, slot_temp, slot_vc0 / 1000, slot_vc1 / 1000);
+        sprintf(s_line, "[%X] V: %4.2f %4.2f| ", n_slot, slot_vc0 / 1000, slot_vc1 / 1000);
     #endif
 
     }
@@ -1109,8 +1109,10 @@ static int64_t try_scanHash(thr_info_t *thr)
 #else
  #ifdef USE_LIVE_ORDER
     int tmp;
+    int last_slot = -1;
+
     for (tmp = 0; tmp < 10; tmp ++) {
-        libbitfury_sendHashOne (thr, live_devs[0]); // 3-5ms load
+        libbitfury_sendHashOne (thr, live_devs[0], &last_slot); // 3-5ms load
         uint64_t recv = work_receive (thr, live_devs[0]);
         hashes += recv;
         bitfury_device_p ld = live_devs[0];
