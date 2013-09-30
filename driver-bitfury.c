@@ -879,7 +879,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     if ( dev->fasync == 0 ) {
         sprintf(s_line, "[%X]", n_slot );
     #ifdef BITFURY_MONITORING
-        float slot_temp = tm_i2c_gettemp(n_slot) * 0.1;
+        float slot_temp = 60; // tm_i2c_gettemp(n_slot) * 0.1;
         float slot_vc0 = tm_i2c_getcore0(n_slot) * 1000;
         float slot_vc1 = tm_i2c_getcore1(n_slot) * 1000;
 
@@ -898,7 +898,9 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
         vc1_median[n_slot] = slot_vc1;
 
         // sprintf(stat_lines[n_slot], "[%X] T:%3.0f | V: %4.0f %4.0f| ", n_slot, slot_temp, slot_vc0, slot_vc1);
-        sprintf(s_line, "[%X] T:%3.0f | V: %4.2f %4.2f| ", n_slot, slot_temp, slot_vc0 / 1000, slot_vc1 / 1000);
+        // sprintf(s_line, "[%X] T:%3.0f | V: %4.2f %4.2f| ", n_slot, slot_temp, slot_vc0 / 1000, slot_vc1 / 1000);
+        // вывод температуры бесполезен для плат Метабанка, значение практически не связанно с уровнем нагрева чипов.
+        sprintf(s_line, "[%X] V: %4.2f %4.2f| ", n_slot, slot_temp, slot_vc0 / 1000, slot_vc1 / 1000);
     #endif
 
     }
@@ -989,7 +991,7 @@ void check_not_hang(bitfury_device_p dev, double speed) {
 
     if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
 
-    if ( dev->csw_back > 32 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
+    if ( dev->csw_back > 100 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
         dev->fixed_clk = false;
         dev->csw_count = 0;
         printf(CL_LT_RED);
@@ -999,10 +1001,12 @@ void check_not_hang(bitfury_device_p dev, double speed) {
         for (i = 0; i < 3; i ++) dev->rbc_stat[i] = 0; // затереть статистику, типа устарела
     }
 
-    if ( speed <= 1.0 ) {
+    if ( speed <= 1.35 || ( speed < 1.8 && speed < dev->prv_speed  ) ) {
         if ( dev->csw_back > 4 ) dev->alerts ++;
     }
     else dev->alerts = 0;
+
+    dev->prv_speed = speed;
 
     // сброс чипа по совсем уж малому хэшрейту
     if ( 3 < dev->alerts ) {
@@ -1095,6 +1099,7 @@ static int64_t try_scanHash(thr_info_t *thr)
     last_call = now;
     cgtime(&last_call);
 
+
     // hashes += works_receive(thr, devices, chip_count);
     works_push (thr->cgpu);
 
@@ -1175,6 +1180,10 @@ static int64_t try_scanHash(thr_info_t *thr)
 
     // рассчет времени основной нагрузки в микросекундах
     load_mcs = now_mcs - tv2mcs(&last_call);
+
+    // struct timespec period = t_diff(begin, end);
+    // load_mcs = ( period.tv_sec * 1000000000LU + period.tv_nsec ) * 0.001; // nsec to usec
+
     if (0 == median_load)
         median_load = load_mcs;
     else
@@ -1209,7 +1218,7 @@ static int64_t try_scanHash(thr_info_t *thr)
            double speed = collect_chip_stats  (dev, maskv);         // for (chip; chip < n-chip; chip++)
            check_not_hang (dev, speed); // проверки на слишком маленькую частоту
            // AUTOFREQ: переключение частоты осциллятора принудительно (в режиме брутфорс или выбора лучшего)
-           if ( dev->csw_back > 50 && !dev->fixed_clk && maskv == 15 )
+           if ( ( dev->alerts >= 3 || ( dev->csw_back > 80 && maskv == 15 ) ) && !dev->fixed_clk )
                 freq_bruteforce (dev);
 
 
@@ -1219,7 +1228,7 @@ static int64_t try_scanHash(thr_info_t *thr)
 
         if (maskv == 15) {
             save_opt_conf(devices, chip_count);
-            interval += 100;
+            interval += 10;
             if (interval > 1500) interval = 0;
         }
 

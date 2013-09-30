@@ -109,6 +109,7 @@ struct bitfury_device {
 
     int              alerts;
     float            eff_speed;       // рассчитывается из big_stat
+    float            prv_speed;       // для оценки "начала забастовки"
     float            hw_rate;
     bool             fixed_clk;    
     float            rbc_stat[4];     // rate-by-clock: 53, 54, 55, 56 associated to chip hash-rate

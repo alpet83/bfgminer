@@ -14,10 +14,10 @@
 
 // processing all chips every cycle (remains about 500ms)
 // #define BITFURY_HARD_LOAD
-#define WORK_FRAME 500
+#define WORK_FRAME 300
 
 // print by chip stats in log files in /var/log/bitfury
-#define BITFURY_CHIP_STAT
+// #define BITFURY_CHIP_STAT
 
 #ifdef BFGMINER_MOD
 #define nmsleep cgsleep_ms

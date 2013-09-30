@@ -442,7 +442,7 @@ unsigned decnonce(unsigned in)
 	return out;
 }
 
-int rehash(const void *midstate, const uint32_t m7, const uint32_t ntime, const uint32_t nbits, uint32_t nnonce) {
+inline int rehash(const void *midstate, const uint32_t m7, const uint32_t ntime, const uint32_t nbits, uint32_t nnonce) {
 	unsigned char in[16];
 	unsigned int *in32 = (unsigned int *)in;
 	unsigned int *mid32 = (unsigned int *)midstate;
@@ -511,18 +511,61 @@ void work_to_payload(struct bitfury_payload *p, struct work *w) {
 	p->nbits = bswap_32(*(unsigned *)(flipped_data + 72));
 }
 
-inline unsigned rehash_test(struct bitfury_device *d, struct bitfury_payload *op, unsigned pn, unsigned offset) {
 
-    pn += offset;
-    bool result = rehash(op->midstate, op->m7, op->ntime, op->nbits, pn);
-
-    if ( result && offset && 0 == offset & 0x80000000 ) {
-        applog(LOG_WARNING, "found solution for chip %X:%X, offset = 0x%X ", d->fasync, d->slot, offset);
-    }
-
-    return result ? pn : 0;
-
+inline unsigned calc_coor(unsigned pn) {
+    return ((pn >> 29) & 0x07) | (((pn) >> 19) & 0x3F8);
 }
+
+
+inline unsigned check_nonce2 (struct bitfury_payload *op, unsigned n) {
+    unsigned pn;
+    unsigned nonce = decnonce(n);
+    unsigned coor;
+    int x;
+    int y;
+
+    if((n & 0xff) < 0x1c) {
+        pn = nonce - 0x400000; //+mod[2];
+        coor = calc_coor (pn);
+        x = coor % 24;
+        y = coor / 24;
+        // should test for bad coordinate and return if bad;
+        if(y < 36) { // 3 out of 24 cases
+            if (rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) {
+                return pn;
+            }
+        }
+    } else {
+        pn = nonce; // mod[0]
+        coor = calc_coor (pn);
+        x = coor % 24;
+        y = coor / 24;
+        if (x >= 17 && y < 36) { // this or mod[1] , 7 out of 24 cases
+            if (rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) {
+                return pn;
+            }
+        }
+        pn = nonce - 0x800000; // +mod[1];
+        coor = calc_coor (pn);
+        x = coor % 24;
+        y = coor / 24;
+        if ( ((x >= 1 && x <= 4) || (x >= 9 && x <= 15)) && y < 36 ){ // 11 out of 24 cases
+            if (rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) {
+                return pn;
+            }
+        }
+    }
+    return 0;
+}
+
+// deprecated test
+inline unsigned rehash_test(struct bitfury_payload *op, unsigned pn, unsigned offset) {
+    pn += offset;
+    bool   result = rehash(op->midstate, op->m7, op->ntime, op->nbits, pn);
+    return result ? pn : 0;
+}
+
+
 
 int test_result(unsigned int *results, int *counter, const unsigned int value, int *dups) {
     int i, dcnt = 0, cnt = counter[0];
@@ -557,8 +600,9 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
     int chip = d->fasync;
     int slot = d->slot;
 
-    char *txbuff = NULL;
-    char *rxbuff = NULL;
+    char *txbuff = spi_gettxbuf();
+    char *rxbuff = spi_getrxbuf();
+
 
     clock_gettime(CLOCK_REALTIME, &(time));
 
@@ -568,8 +612,9 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
         int found = 0;
         unsigned * results = d->results;
         tm_i2c_set_oe(slot);
-        // nusleep(100);
+        nusleep(100);
         // prepare work
+        memset(atrvec, 0, 20 * 4 + 4 + 16);
         memcpy(atrvec, p, 20 * 4);
         ms3_compute(atrvec);
 
@@ -578,130 +623,95 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d) {
         if (1) {
             spi_clear_buf(); spi_emit_break();
             spi_emit_fasync(chip);
-            spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+            spi_emit_data(0x3000, (void*)&atrvec[0], 19 * 4); // + 4 + 16
         }
+        int buff_sz = spi_getbufsz();
+        spi_txrx(txbuff, rxbuff, buff_sz);
 
-        txbuff = spi_gettxbuf();
-        rxbuff = spi_getrxbuf();
+        int ofst = 4 + chip;
 
-        spi_txrx(txbuff, rxbuff, spi_getbufsz());
-        memcpy(newbuf, rxbuff + 4 + chip, 17 * 4); // 16 x nonce + flags (?) + chip
+
+        memcpy(newbuf, rxbuff + ofst, 17 * 4); // 16 x nonce + flags (?) + chip
 
         tm_i2c_clear_oe(slot);
         d->job_switched = ( newbuf[16] != oldbuf[16] );
+
+        if ( 7 == d->fasync && d->job_switched && buff_sz - ofst < 17 * 4 )
+            applog(LOG_WARNING, "#AMAZING: buff_sz = %d, offset = %d, rest bytes = %d ", buff_sz, ofst, buff_sz - ofst );
 
         d->old_num = 0;
         d->future_num = 0;
 
         int dups = 0;
-        if (op && o2p && d->job_switched)
-          for (i = 0; i < 16; i++) {
-            if (oldbuf[i] != newbuf[i] ) {
-                int n, pr;
-                unsigned pn;        // possible nonce
-                unsigned int s = 0; // TODO zero may be solution
-                unsigned int so = 0;
-                unsigned int sf = 0;
-                unsigned int fl = 0;
-                if ( (newbuf[i] & 0xFF) == 0xE0 ) continue;
+        if (op && o2p && d->job_switched) {
+            for (i = 0; i < 16; i++) {
+                if (oldbuf[i] != newbuf[i] ) {
+                    int n, pr = results_num;
+                    unsigned pn;        // possible nonce
+                    unsigned int s = 0; // TODO zero may be solution
+                    unsigned int so = 0;
+                    unsigned int sf = 0;
+                    unsigned int fl = 0;
+                    if ( (newbuf[i] & 0xFF) == 0xE0 ) continue;
+#ifdef              OLD_NONCE_TEST
+                    //* deprecated code
+                    pn = decnonce (newbuf[i]);
+                    for (n = 0; n < TEST_OFFSETS; n ++) {
+                        if (!s)  s  = rehash_test( op, pn, offsets[n] );
+                        if (!so) so = rehash_test(o2p, pn, offsets[n] );
+                        if (!sf) sf = rehash_test(  p, pn, offsets[n] );
+                    } // */
 
-
-                pn = decnonce(newbuf[i]);
-                pr = results_num;
-
-                // oldbuf[i] = newbuf [i]; // prevent next reaction
-
-                for (n = 0; n < TEST_OFFSETS; n ++) {
-                    if (!s)  s  = rehash_test(d,  op, pn, offsets[n] );
-                    if (!so) so = rehash_test(d, o2p, pn, offsets[n] );
-                    if (!sf) sf = rehash_test(d,   p, pn, offsets[n] );
-                }
-
-
-                if (s) {
-                    s = bswap_32(s);
-                    fl += test_result(results, &results_num, s, &dups);
-                }
-
-
-                if (so) {
-                    so = bswap_32(so);
-                    fl += test_result(d->old_nonce, &d->old_num, so, &dups);
-                }
-
-                if (sf) {
-                    sf = bswap_32(sf);
-                    fl += test_result(d->future_nonce, &d->future_num, sf, &dups);
-                }
-
-                found += fl;
-                d->found_last += fl;
-
-                int wrk_id = 0;
-                if ( d->work )
-                     wrk_id = d->work->id;
-
-                if ( d->found_last > 50 && fl > 0 )
-                    applog(LOG_WARNING, "#DBG: chip %X_%X[%X] old = %08X, new = %08X, s = { %08X, %08X:%X->%X, %08X }, work.id = %3d, fl = %d, ft = %3d, dups = %d ",
-                                               d->fasync, d->slot, i, oldbuf[i], newbuf[i], so, s, pr, results_num, sf, wrk_id, fl, d->found_last, dups ); // */
-
-
-                if ( dups && 15 == i )
-                     d->job_switched = 1;
-                /*
-                if(     rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) s = pn;
-                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00400000)) s = pn - 0x00400000;
-                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00800000)) s = pn - 0x00800000;
-                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02800000)) s = pn + 0x02800000;
-                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-                else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x00400000)) s = pn + 0x00400000;
-                if (s) {
-                    results[results_num++] = bswap_32(s);
-                    found++;
-                }
-
-                s = 0;
-                if (    rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn)) s = pn;
-                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00400000)) s = pn - 0x00400000;
-                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00800000)) s = pn - 0x00800000;
-                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02800000)) s = pn + 0x02800000;
-                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-                else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x00400000)) s = pn + 0x00400000;
-                if (s) {
-                    d->old_nonce[d->old_num++] = bswap_32(s);
-                    found++;
-                }
-
-                s = 0;
-                if(     rehash(p->midstate, p->m7, p->ntime, p->nbits, pn)) s = pn;
-                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00400000)) s = pn - 0x00400000;
-                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00800000)) s = pn - 0x00800000;
-                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02800000)) s = pn + 0x02800000;
-                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
-                else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x00400000)) s = pn + 0x00400000;
-                if (s) {
-                    d->future_nonce[d->future_num++] = bswap_32(s);
-                    found++;
-                }
-                // */
-                // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
-                if (fl < 1 && 0 == dups && d->csw_back > 1) {
-                    d->hw_errors++;
-#ifdef BFGMINER_MOD
-                    inc_hw_errors2(thr, NULL, &pn);
-#else
-                    inc_hw_errors(thr);
+#else               //*
+                    pn = newbuf[i];
+                    s  = check_nonce2(op,  pn);
+                    so = check_nonce2(o2p, pn);
+                    sf = check_nonce2(p,   pn); // */
 #endif
-                }
-            }
-        }
-        d->results_n = results_num;
 
-        if (d->job_switched) {
+                    if (s) {
+                        s = bswap_32(s);
+                        fl += test_result(results, &results_num, s, &dups);
+                    }
+
+
+                    if (so) {
+                        so = bswap_32(so);
+                        fl += test_result(d->old_nonce, &d->old_num, so, &dups);
+                    }
+
+                    if (sf) {
+                        sf = bswap_32(sf);
+                        fl += test_result(d->future_nonce, &d->future_num, sf, &dups);
+                    }
+
+                    found += fl;
+                    d->found_last += fl;
+
+                    int wrk_id = 0;
+                    if ( d->work )
+                        wrk_id = d->work->id;
+
+                    if ( results_num > 4 && fl > 0 )
+                        applog(LOG_WARNING, "#DBG: chip %X_%X[%X] old = %08X, new = %08X, s = { %08X, %08X:%X->%X, %08X }, work.id = %3d, fl = %d, ft = %3d, dups = %d ",
+                               d->fasync, d->slot, i, oldbuf[i], newbuf[i], so, s, pr, results_num, sf, wrk_id, fl, d->found_last, dups ); // */
+
+                     // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
+                    if (fl < 1 && 0 == dups && d->csw_back > 1) {
+                        d->hw_errors++;
+#ifdef BFGMINER_MOD
+                        inc_hw_errors2(thr, NULL, &pn);
+#else
+                        inc_hw_errors(thr);
+#endif
+                    }
+                } // if oldbuf <> newbuf
+            } // for
+            d->results_n = results_num;
             memcpy(o2p, op, sizeof(struct bitfury_payload));
             memcpy(op,  p,  sizeof(struct bitfury_payload));
             memcpy(oldbuf, newbuf, 17 * 4);
-        }
+        } // if op & o2p
     }
 }
 
