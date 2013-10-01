@@ -1383,14 +1383,17 @@ static int64_t bitfury_scanHash(thr_info_t *thr) {
      // загружать X мс полезной работой - теоретически меньше будет режиков.
 
 
+
+#ifdef BITFURY_HARD_LOAD
+     result = try_scanHash(thr);
+#else
      double start_mcs = tv2mcs( get_cgtime() ) ;
      double elapsed = 0;
-
      do {
          result += try_scanHash(thr);
          elapsed = tv2mcs( get_cgtime() ) - start_mcs;
      } while ( elapsed < WORK_FRAME * 1000 );
-
+#endif
      int ms = 1;
 #ifdef BFGMINER_MOD
      nmsleep (ms);
