@@ -1027,6 +1027,10 @@ void check_not_hang(bitfury_device_p dev, double speed) {
         dev->alerts = 0;
         dev->csw_back = 0;
         dev->csw_count ++;
+
+        memset (dev->oldbuf, 0, sizeof(dev->oldbuf));
+        memset (dev->tsvals, 0, sizeof(dev->tsvals));
+
         cgtime (&dev->rst_time);
         dev->cch_stat[0] = dev->cch_stat[1] = dev->cch_stat[2] = dev->cch_stat[3] = 0; // полный сброс статистики автоподбора
     }
@@ -1184,10 +1188,12 @@ static int64_t try_scanHash(thr_info_t *thr)
     cgtime(&now);
     now_mcs = tv2mcs (&now);
 
-    if (short_out_t == 0) {
+    if (!short_out_t) {
         short_out_t  = now.tv_sec;
         short_out_tf = now_mcs;
     }
+
+    if (!long_out_t) long_out_t = now.tv_sec;
 
     if ( loops_count < 50 )
          return hashes; // обычно статистика не накапливается
@@ -1321,7 +1327,9 @@ static int64_t try_scanHash(thr_info_t *thr)
         if ( maskv == 15 ) printf("%s", CL_RESET);
     }
 #ifdef BITFURY_ENABLE_LONG_STAT
-    if (elapsed >= long_stat) {
+    if (elapsed >= long_stat ) {
+        long_out_t = now.tv_sec;
+
         int shares_first = 0, shares_last = 0, shares_total = 0;
         char stat_lines[BITFURY_MAXBANKS][256] = {0};
         int len, k;
@@ -1359,8 +1367,9 @@ static int64_t try_scanHash(thr_info_t *thr)
                 snprintf(stat_lines[i] + len, 256 - len, "- %4.1f + %4.1f = %4.1f Gh/s slot %X ", gh1h, gh2h, ghsum, i);
                 applog(LOG_WARNING, stat_lines[i]);
             }
-        long_out_t = now.tv_sec;
+
         printf("%s", CL_RESET);
+
         // attroff(A_BOLD);
     }
 #endif

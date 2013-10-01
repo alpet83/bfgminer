@@ -579,12 +579,12 @@ int test_result(unsigned int *results, int *counter, const unsigned int value) {
 }
 
 inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsigned pn, int i, char *dbg) {
-    if ( (pn & 0xFF) == 0xE0 ) return 0;
 
     unsigned int s = 0; // TODO zero may be solution
     unsigned int so = 0;
     unsigned int sf = 0;
     unsigned int fl = 0;
+    int dups = 0;
     int pr = d->results_n;
     struct bitfury_payload   *p = &(d->payload);
     struct bitfury_payload  *op = &(d->opayload);
@@ -607,21 +607,24 @@ inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsign
 
     if (s) {
         s = bswap_32(s);
-        fl += test_result(d->results, &(d->results_n), s);
-        dbg[i * 2 + 1] = 0x63;
+        if ( test_result(d->results, &(d->results_n), s) ) {
+            dbg[i * 2 + 1] = 0x63; fl ++;
+        } else dups ++;
     }
 
 
     if (so) {
         so = bswap_32(so);
-        fl += test_result(d->old_nonce, &(d->old_num), so);
-        dbg[i * 2 + 1] = 0x70;
+        if ( test_result(d->old_nonce, &(d->old_num), so) ) {
+            dbg[i * 2 + 1] = 0x70; fl ++;
+        } else dups ++;
     }
 
     if (sf) {
         sf = bswap_32(sf);
-        fl += test_result(d->future_nonce, &(d->future_num), sf);
-        dbg[i * 2 + 1] = 0x66;
+        if ( test_result(d->future_nonce, &(d->future_num), sf) ) {
+            dbg[i * 2 + 1] = 0x66; fl ++;
+        } else dups ++;
     }
 
 
@@ -639,21 +642,64 @@ inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsign
                d->fasync, d->slot, so, s, pr, d->results_n, sf, wrk_id, fl, d->found_last ); // */
 
     // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
-    if (fl < 1 && d->csw_back > 1) {
+    if (fl < 1 && 0 == dups && d->csw_back > 0) {
         dbg[i * 2] = 0x45;
         d->hw_errors++;
 #ifdef BFGMINER_MOD
-        inc_hw_errors2(thr, NULL, &pn);
+        inc_hw_errors2(thr, d->o2work, &pn);
 #else
         inc_hw_errors(thr);
 #endif
+
         return -1;
     }
+
+    if (dups)
+        dbg[i * 2 + 1] = 0x64;
+
 
 
 
     return fl;
 }
+
+inline int eq_count(unsigned *old, unsigned *buff) {
+    int i, eq = 0;
+    for (i = 0; i < 16; i ++)
+        if ( 0 == old[i] || old [i] == buff [i] ) eq ++;
+
+    return eq;
+}
+
+
+void dump_results(struct bitfury_device *d, unsigned *old, unsigned *buff, int test) {
+    int i, chg = 0;
+    for (i = 0; i < 17; i ++)
+        if (old[i] != buff[i]) chg ++;
+
+    char mode[] = "a";
+    if (d->csw_back < 1) mode[0] = 0x77; // rewrite on reclock
+    FILE *f = fopen("/var/log/chip_dbg.log", "a");;
+
+
+    char tmp[64];
+    format_time (NULL, tmp);
+    fprintf(f, "%s;", tmp);
+
+    if (d->work)
+        fprintf(f, "work_id:%7d;chip:%d@%x;", d->work->id, d->fasync, d->slot);
+    for (i = 0; i < 17; i ++) {
+        char ch = 0x20;
+        if ( old [i] != buff[i] )
+             ch = 0x2A;
+        fprintf(f, "%c%08X;", ch, buff[i]);
+    }
+
+
+    fprintf(f, "eq = %2d, chg = %2d, test = %d, res = %d\n", eq_count(old, buff), chg, test, d->results_n);
+    fclose(f);
+}
+
 
 
 
@@ -665,7 +711,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
     struct bitfury_payload   *p = &(d->payload);
     struct bitfury_payload  *op = &(d->opayload);
     struct bitfury_payload *o2p = &(d->o2payload);
-    struct timespec d_time;
+
     struct timespec time;
 
 #define TEST_OFFSETS 3
@@ -679,23 +725,18 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
     char *txbuff = spi_gettxbuf();
     char *rxbuff = spi_getrxbuf();
 
-
     clock_gettime(CLOCK_REALTIME, &(time));
     int i;
-
-    int found = 0;
-    unsigned * results = d->results;
-
 
     if (slot != last_slot[0]) {
 
         if (last_slot[0] >= 0)
             tm_i2c_clear_oe(last_slot[0]);
-        nusleep(85);
+        // nusleep(85);
         tm_i2c_set_oe(slot);
 
         last_slot[0] = slot;
-        nusleep(30); // пробная пауза
+        // nmsleep(53); // пробная пауза
     }
 
 
@@ -706,70 +747,81 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
 
 
     /* Programming next value */
-    spi_clear_buf();
-    nusleep(85);
-    spi_emit_break();
-    spi_emit_fasync(chip);
-    nusleep(85);
-    spi_emit_data(0x3000, (void*)&atrvec[0], 19 * 4); // + 4 + 16
 
-    int buff_sz = spi_getbufsz();
-    spi_txrx(txbuff, rxbuff, buff_sz);
 
-    int ofst = 4 + chip;
-    memcpy(newbuf, rxbuff + ofst, 17 * 4); // 16 x nonce + flags (?) + chip
+    bool dump = ( d->eff_speed > 0.1 && d->eff_speed < 1.3 && d->csw_back < 3 );
 
-    d->job_switched = ( newbuf[16] != oldbuf[16] );
-
-    if ( 7 == d->fasync && d->job_switched && buff_sz - ofst < 17 * 4 )
-        applog(LOG_WARNING, "#AMAZING: buff_sz = %d, offset = %d, rest bytes = %d ", buff_sz, ofst, buff_sz - ofst );
-
+    int n;
     d->old_num = 0;
     d->future_num = 0;
 
-    if (op && o2p && d->job_switched) {
 
-        char ffirst[] = "0-0-0-0 0-0-0-0 0-0-0-0 0-0-0-0 \0";
-        char fcheck[] = "0-0-0-0 0-0-0-0 0-0-0-0 0-0-0-0 \0";
+    spi_clear_buf();
+    spi_emit_break();
+    spi_emit_fasync(chip);
+    spi_emit_data(0x3000, (void*)&atrvec[0], 19 * 4); // + 4 + 16
+    int buff_sz = spi_getbufsz();
+    spi_txrx (txbuff, rxbuff, buff_sz);
+    int ofst = 4 + chip;
+    memcpy (newbuf, rxbuff + ofst, 17 * 4); // 16 x nonce + ? + chip
 
-        for (i = 0; i < 16; i++)
-            if (oldbuf[i] != newbuf[i] ) {
-                int fc = handle_result (thr, d, newbuf [i], i, ffirst);
-                if (fc >= 0)
-                    found += fc;
-            }
+    int eqc = eq_count(oldbuf, newbuf);    // подсчет оставшихся прежними нонсов
 
+    if ( dump )
+         dump_results (d, oldbuf, newbuf, 0);
 
-        memcpy(oldbuf, newbuf, 17 * 4);
+    if ( op && o2p ) { // && d->job_switched
 
-#ifdef DOUBLE_TEST
-        int extra = 0;
-        spi_clear_buf(); spi_emit_break();
-        spi_emit_fasync(chip);
-        spi_emit_data(0x3000, (void*)&atrvec[0], 19 * 4); // + 4 + 16 */
-        spi_txrx(txbuff, rxbuff, buff_sz); // проверочный обмен
-        memcpy(newbuf, rxbuff + ofst, 17 * 4); // 16 x nonce + flags (?) + chip
-
-        for (i = 0; i < 16; i++)
-            if (oldbuf[i] != newbuf[i] ) {
-                int fc = handle_result (thr, d, newbuf [i], i, fcheck);
-
-                if (fc >= 0)
-                    extra += fc;
-            }
-
-
-
-        if (extra) {
-            found += extra;
-            applog(LOG_WARNING, "Extra found solutions %d, first = %s, check = %s ", extra, ffirst, fcheck);
-            memcpy(oldbuf, newbuf, 17 * 4);
+        if ( eqc < 13 && d->csw_back > 0 ) {
+            memcpy(oldbuf, newbuf, 16 * 4);  // sync nonces if big update
+            return;
         }
-#endif
 
-        memcpy(o2p, op, sizeof(struct bitfury_payload));
-        memcpy(op,  p,  sizeof(struct bitfury_payload));
+        d->job_switched = ( newbuf[16] != oldbuf[16] );
 
+
+        for (i = 0; i < 16; i++)
+            if ( oldbuf[i] != newbuf[i] ) {
+                d->eqcntr [i] = 0;
+
+                unsigned b = newbuf[i];
+                b &= 0xFF;
+
+                if ( b != 0xE0 && eqc >= 13 )
+                     d->eqcntr [i] = 1; // это с большой вероятностью nonce, а не грязь
+
+                oldbuf[i] = newbuf[i];
+            }
+            else
+                d->eqcntr [i] ++;
+
+
+        int errc = 0;
+        char ffirst[] = "0-0-0-0 0-0-0-0 0-0-0-0 0-0-0-0 \0";
+
+        unsigned *tested = d->tsvals;
+
+        // АЛГО: если столбец перестал изменяться, можно проверить в нем значения
+        for (i = 0; i < 16; i++)
+            if ( d->eqcntr[i] > 0 && newbuf[i] != tested [i] ) {
+                tested [i] = newbuf[i];
+
+                int fc = handle_result (thr, d, newbuf [i], i, ffirst);
+                if (fc < 0) errc ++;
+
+            }
+
+        if ( errc >= 8 ) {
+             d->hw_errors -= errc; // ложные hw
+             thr->cgpu->hw_errors -= errc;
+             errc = 0;
+        }
+
+        if (d->job_switched) {
+            memcpy(o2p, op, sizeof(struct bitfury_payload));
+            memcpy(op,  p,  sizeof(struct bitfury_payload));
+            oldbuf [16] = newbuf[16];
+        }
     } // if op & o2p
 
 }

@@ -67,6 +67,9 @@ struct bitfury_device {
     unsigned osc6_bits_upd;
 	unsigned newbuf[17];
 	unsigned oldbuf[17];
+    unsigned eqcntr[16]; // сколько раз при опросе были равны буфера
+    unsigned tsvals[16]; // уже проверенные значения
+
     struct work *work;
     struct work *owork;
     struct work *o2work;

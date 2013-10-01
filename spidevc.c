@@ -167,34 +167,34 @@ int spi_txrx(const char *wrbuf, char *rdbuf, int bufsz)
 	spi_reset(10);
 
 	rv = 0;
-	while (bufsz >= 4096) {
-                tr[rv].tx_buf = (uintptr_t) wrbuf;
-                tr[rv].rx_buf = (uintptr_t) rdbuf;
-                tr[rv].len = 4096;
-                tr[rv].delay_usecs = 1;
-                tr[rv].speed_hz = speed;
-                tr[rv].bits_per_word = bits;
-                bufsz -= 4096;
-                wrbuf += 4096; rdbuf += 4096; rv ++;
-        }
-        if (bufsz > 0) {
-                tr[rv].tx_buf = (uintptr_t) wrbuf;
-                tr[rv].rx_buf = (uintptr_t) rdbuf;
-                tr[rv].len = (unsigned)bufsz;
-                tr[rv].delay_usecs = 1;
-                tr[rv].speed_hz = speed;
-                tr[rv].bits_per_word = bits;
-                rv ++;
-        }
+    while (bufsz >= 4096) {
+        tr[rv].tx_buf = (uintptr_t) wrbuf;
+        tr[rv].rx_buf = (uintptr_t) rdbuf;
+        tr[rv].len = 4096;
+        tr[rv].delay_usecs = 1;
+        tr[rv].speed_hz = speed;
+        tr[rv].bits_per_word = bits;
+        bufsz -= 4096;
+        wrbuf += 4096; rdbuf += 4096; rv ++;
+    }
+    if (bufsz > 0) {
+        tr[rv].tx_buf = (uintptr_t) wrbuf;
+        tr[rv].rx_buf = (uintptr_t) rdbuf;
+        tr[rv].len = (unsigned)bufsz;
+        tr[rv].delay_usecs = 1;
+        tr[rv].speed_hz = speed;
+        tr[rv].bits_per_word = bits;
+        rv ++;
+    }
 
-        i = rv;
-        for (j = 0; j < i; j++) {
-                rv = (int)ioctl(fd, SPI_IOC_MESSAGE(1), (intptr_t)&tr[j]);
-                if (rv < 0) {
-			perror("WTF! Unable to SPI_IOC_MESSAGE");
-			return -1; 
-		}
+    i = rv;
+    for (j = 0; j < i; j++) {
+        rv = (int)ioctl(fd, SPI_IOC_MESSAGE(1), (intptr_t)&tr[j]);
+        if (rv < 0) {
+            perror("WTF! Unable to SPI_IOC_MESSAGE");
+            return -1;
         }
+    }
 
 	spi_reset(4096);
 

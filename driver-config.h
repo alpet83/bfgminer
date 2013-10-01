@@ -15,7 +15,7 @@
 // processing all chips every cycle (remains about 500ms)
 #define BITFURY_HARD_LOAD
 #define WORK_FRAME 300
-#define DOUBLE_TEST
+// #define DOUBLE_TEST
 
 // print by chip stats in log files in /var/log/bitfury
 // #define BITFURY_CHIP_STAT
