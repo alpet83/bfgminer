@@ -854,6 +854,11 @@ void freq_bruteforce(bitfury_device_p dev) {
 }
 
 
+inline double speed_in_period(double *stat, double range_mcs, double now_mcs, int *shares_found) {
+    *shares_found = calc_stat_f(stat, range_mcs, now_mcs);
+    return shares_to_ghashes(*shares_found, range_mcs / 1e6 );
+}
+
 
 
 double collect_chip_stats (bitfury_device_p dev, int loop) {
@@ -866,11 +871,14 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
 
     if (elps_eff > 5e8) elps_eff = 5e8; // 500 seconds limit
 
-    int shares_found = calc_stat_f(dev->stat_tsf, elps_eff, now_mcs);
+    int shares_found = 0;
+
+    double ghash = speed_in_period(dev->stat_tsf, elps_eff, now_mcs, &shares_found);
+
     int i_chip = dev->fasync;
     int n_slot = dev->slot;
     int len;
-    double ghash;
+
     double alt_gh;
     char *s_line = stat_lines[n_slot];
 
@@ -906,7 +914,6 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     }
 
     len = strlen(stat_lines[n_slot]);
-    ghash = shares_to_ghashes(shares_found, elps_eff / 1e6 );
 
     dev->csw_back ++;
 
@@ -1151,11 +1158,12 @@ static int64_t try_scanHash(thr_info_t *thr)
             busy_count ++;
 
     } // for tmp
+
  #else
 
     for (i = 0; i < chip_count; i ++)
         if ( devices[i].slot == active_slot ) {
-             libbitfury_sendHashOne (thr, &devices[i]);
+             libbitfury_sendHashOne (thr, &devices[i], &last_slot);
              hashes += work_receive (thr, &devices[i]);
              nusleep (interval);
         }
@@ -1166,6 +1174,10 @@ static int64_t try_scanHash(thr_info_t *thr)
             active_slot = 0;
     } while ( !chips_in_slot[active_slot] );
  #endif
+ if (last_slot >= 0)
+     tm_i2c_clear_oe(last_slot);
+
+
 #endif
 
 
@@ -1218,19 +1230,24 @@ static int64_t try_scanHash(thr_info_t *thr)
 
            bitfury_device_p dev = &devices[chip];
            double speed = collect_chip_stats  (dev, maskv);         // for (chip; chip < n-chip; chip++)
-           check_not_hang (dev, speed); // проверки на слишком маленькую частоту
+
            // AUTOFREQ: переключение частоты осциллятора принудительно (в режиме брутфорс или выбора лучшего)
            if ( ( dev->alerts >= 3 || ( dev->csw_back > 80 && maskv == 15 ) ) && !dev->fixed_clk )
                 freq_bruteforce (dev);
 
 
            gh[dev->slot][dev->fasync] = speed;
+
+
+           // для проверки на зависания лучше оценивать последний период 10-20с
+           speed = speed_in_period(dev->stat_tsf, elps_mcs, now_mcs, &k);
+           check_not_hang (dev, speed); // проверки на слишком маленькую частоту
         }
 
 
         if (maskv == 15) {
             save_opt_conf(devices, chip_count);
-            interval += 10;
+            // interval += 10;
             if (interval > 1500) interval = 0;
         }
 
@@ -1294,7 +1311,9 @@ static int64_t try_scanHash(thr_info_t *thr)
 
         applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, interval = %d mcs, seconds to long stat %5d, median_load = %.1f ms, busy = %7d, ready = %7d ",
                                 ghsm_saldo, interval, long_stat - elapsed, median_load * 0.001, busy_count, ready_count );
+
         applog(LOG_WARNING, line);
+        busy_count = ready_count = 0;
         // malloc_stats();
 #endif
         short_out_t = now.tv_sec;
