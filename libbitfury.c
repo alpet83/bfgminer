@@ -638,7 +638,7 @@ inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsign
         wrk_id = d->work->id;
 
     if ( fl && 0xE0 == ( pn & 0xFF ) )
-        applog(LOG_WARNING, "Some nonce found acceptable = %x ", pn);
+        applog(LOG_WARNING, "\e[1;33m Some nonce found acceptable = %x <<----------------------------\e[0m", pn);
 
 
     if ( d->results_n > 4 && fl > 0 )
@@ -707,6 +707,52 @@ void dump_results(struct bitfury_device *d, unsigned *old, unsigned *buff, int t
 
 
 
+int eq_bits(unsigned a, unsigned b) {
+    unsigned i, mask = 1, cnt = 0;
+    for (i = 0; i < 32 && mask; i ++) { // сдвиг до обнуления
+        if ( ( a & mask ) == ( b & mask ) ) cnt ++;
+        mask <<= 1;
+    }
+    return cnt;
+}
+
+void shift_restore(unsigned *old, unsigned *buff, char *dbg) {
+    int i, cnt = eq_count(old, buff);
+
+    for (i = 0; i < 16; i ++) {
+        unsigned ov = old[i];
+        unsigned nv = buff[i];
+
+        unsigned lbit = buff[i + 1] & 0x001; // судя по пробным вычислениям, этот бит чаще всего будет требоваться
+        unsigned hbit = 0;
+        if (i > 00) hbit = buff[i - 1] & 0x80000000;
+
+        if ( 0 == ov || 0 == nv || 0xE0 == (char)nv || ov == nv ) continue;
+
+        unsigned ltest = ( nv << 1 ) | ( hbit >> 31 );
+        unsigned rtest = ( nv >> 1 ) | ( lbit << 31 );
+
+        // скорее всего один из битов не только пропущен, но и может быть единичным
+
+        char tmp[32];
+        if ( eq_bits( ltest, ov ) >= 27 ) {
+            sprintf(tmp, "%x:L%09x<-%08x ", i, ov, ltest);
+            buff[i] = ov;
+        }
+        if ( eq_bits( rtest, ov ) >= 27 ) {
+            sprintf(tmp, "%x:R%09x<-%08x ", i, ov, rtest);
+            buff[i] = ov;
+        }
+
+        strcat(dbg, tmp);
+
+    }
+    // if (cnt < 2) applog(LOG_WARNING, "shift_restore: %s", dbg);
+
+}
+
+
+
 void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int *last_slot) {
 
     unsigned *newbuf = d->newbuf;
@@ -771,6 +817,19 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
 
     int eqc = eq_count(oldbuf, newbuf);    // подсчет оставшихся прежними нонсов
 
+    int rest = 0;
+    char msg[1024] = { 0 };
+
+    if (d->csw_back && eqc < 15 ) {
+          shift_restore(d->acvals, newbuf, msg);
+          rest = eq_count(oldbuf, newbuf);
+    } //*/
+
+    if (rest > eqc) {
+        // if (eqc < 4) applog(LOG_WARNING, "shift_restore recovered results from %2d to %2d, for chip %d@%x, dbg:\n\t %s", eqc, rest, chip, slot, msg);
+        eqc = rest;
+    }
+
     if ( dump )
          dump_results (d, oldbuf, newbuf, 0);
 
@@ -808,11 +867,17 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
         // АЛГО: если столбец перестал изменяться, можно проверить в нем значения
         for (i = 0; i < 16; i++)
             if ( d->eqcntr[i] > 0 && newbuf[i] != tested [i] ) {
-                tested [i] = newbuf[i];
+                unsigned pn = newbuf[i];
 
-                int fc = handle_result (thr, d, newbuf [i], i, ffirst);
-                if (fc < 0) errc ++;
+                int fc = handle_result (thr, d, pn, i, ffirst);
+                if (fc < 0) {
+                    errc ++;
+                    d->eqcntr[i] = 0;
+                }
+                if (fc > 0)
+                    d->acvals[i] = pn;
 
+                tested [i] = pn;
             }
 
         if ( errc >= 8 ) {
