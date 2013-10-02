@@ -637,6 +637,10 @@ inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsign
     if ( d->work )
         wrk_id = d->work->id;
 
+    if ( fl && 0xE0 == ( pn & 0xFF ) )
+        applog(LOG_WARNING, "Some nonce found acceptable = %x ", pn);
+
+
     if ( d->results_n > 4 && fl > 0 )
         applog(LOG_WARNING, "#DBG: chip %X_%X s = { %08X, %08X:%X->%X, %08X }, work.id = %3d, fl = %d, ft = %3d",
                d->fasync, d->slot, so, s, pr, d->results_n, sf, wrk_id, fl, d->found_last ); // */

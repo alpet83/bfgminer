@@ -998,6 +998,7 @@ void check_not_hang(bitfury_device_p dev, double speed) {
 
     if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
 
+#ifdef  BITFURY_AUTOCLOCK
     if ( dev->csw_back > 100 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
         dev->fixed_clk = false;
         dev->csw_count = 0;
@@ -1007,6 +1008,7 @@ void check_not_hang(bitfury_device_p dev, double speed) {
         int i;
         for (i = 0; i < 3; i ++) dev->rbc_stat[i] = 0; // затереть статистику, типа устарела
     }
+#endif
 
     if ( speed <= 1.35 || ( speed < 1.8 && speed < dev->prv_speed  ) ) {
         if ( dev->csw_back > 4 ) dev->alerts ++;
@@ -1237,11 +1239,11 @@ static int64_t try_scanHash(thr_info_t *thr)
            bitfury_device_p dev = &devices[chip];
            double speed = collect_chip_stats  (dev, maskv);         // for (chip; chip < n-chip; chip++)
 
+#ifdef  BITFURY_AUTOCLOCK
            // AUTOFREQ: переключение частоты осциллятора принудительно (в режиме брутфорс или выбора лучшего)
            if ( ( dev->alerts >= 3 || ( dev->csw_back > 80 && maskv == 15 ) ) && !dev->fixed_clk )
                 freq_bruteforce (dev);
-
-
+#endif
            gh[dev->slot][dev->fasync] = speed;
 
 
