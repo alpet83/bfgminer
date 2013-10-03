@@ -13,8 +13,9 @@
 // #define FAST_CLOCK1
 
 // processing all chips every cycle (remains about 500ms)
-#define BITFURY_HARD_LOAD
-#define WORK_FRAME 300
+// #define BITFURY_HARD_LOAD
+// #define USE_LIVE_ORDER
+#define WORK_FRAME 30
 // #define DOUBLE_TEST
 
 // print by chip stats in log files in /var/log/bitfury
@@ -27,10 +28,10 @@
 
 #ifdef FAST_CLOCK1
         #define BASE_OSC_BITS 51
-        #define LOW_HASHRATE 2.5
+        #define LOW_HASHRATE 2.2
 #else
         #define BASE_OSC_BITS 53
-        #define LOW_HASHRATE 1.8
+        #define LOW_HASHRATE 1.5
 #endif
 
 #endif

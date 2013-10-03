@@ -70,6 +70,7 @@ struct bitfury_device {
     unsigned eqcntr[16]; // сколько раз при опросе были равны буфера
     unsigned acvals[16]; // принятые решения
     unsigned tsvals[16]; // уже проверенные значения
+    int      index;      // индекс проверяемого значения
 
 
     struct work *work;

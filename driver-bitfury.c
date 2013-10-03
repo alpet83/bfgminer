@@ -46,8 +46,8 @@
 #define STAT_LINE_LENGTH 1024
 
 #ifdef BITFURY_METABANK
-// print temperature and vCore for slots
-#define BITFURY_MONITORING
+ // print vCore for slots
+ // #define BITFURY_MONITORING
 #endif
 
 
@@ -60,6 +60,9 @@ typedef timeval_t *timeval_p;
 struct device_drv bitfury_drv;
 
 // TODO: все следующие переменные надо переместить в структуру контекста устройства (!), которую адресовать из cgpu_info
+
+const int short_stat = 20;
+
 unsigned loops_count = 0;
 unsigned call_count = 0;
 static int last_chip = 0; // для кольцевого обхода по выдаче заданий
@@ -183,7 +186,7 @@ static int bitfury_submitNonce(thr_info_t *thr, bitfury_device_t *device, struct
     int i;
     int is_dupe = 0;
 
-    for(i=0; i<32; i++) {
+    for (i=0; i < 32; i++) {
         if(device->nonces[i] == nonce) {
             is_dupe = 1;
             break;
@@ -198,11 +201,12 @@ static int bitfury_submitNonce(thr_info_t *thr, bitfury_device_t *device, struct
         i = device->stat_counter++;
         device->stat_ts [i] = now->tv_sec;
         device->stat_tsf[i] = tv2mcs(now);
+
         if (device->stat_counter == BITFURY_STAT_N)
             device->stat_counter = 0;
     }
 
-    return(!is_dupe);
+    return (!is_dupe);
 }
 
 
@@ -474,7 +478,7 @@ void save_opt_conf (bitfury_device_t *devices, int chip_count) {
 }
 
 
-
+// #undef PREFETCH_WORKS
 
 #ifdef PREFETCH_WORKS
 int next_prefetch(int i) {
@@ -516,8 +520,11 @@ static bool bitfury_fill(struct cgpu_info *cgpu) {
     int i;
 
     struct work* nw = NULL;
-
-    int max_need = cgpu->chip_count + 50;
+#ifdef BITFURY_HARD_LOAD
+    int max_need = MAX (4, cgpu->chip_count / 2);
+#else
+    int max_need = 10;
+#endif
 
     if (max_need > PREFETCH_WORKS)
         max_need = PREFETCH_WORKS;
@@ -554,7 +561,7 @@ int work_push(cgpu_info_t *cgpu, bitfury_device_p dev) {
     dev->job_switched = 0;
     if ( dev->work == NULL )
     {
-        struct work *qwork  = cgpu->queued_work;
+        // struct work *qwork  = cgpu->queued_work;
 
 #ifdef  PREFETCH_WORKS
         dev->work = load_prefetch (cgpu);
@@ -565,7 +572,7 @@ int work_push(cgpu_info_t *cgpu, bitfury_device_p dev) {
         if (NULL == dev->work) return 0;
 
         cgtime(&dev->work_start);
-        work_to_payload(&(dev->payload), dev->work);
+        work_to_payload(&(dev->payload), dev->work); // это задание будет теперь погружаться в буфер, при каждом обмене
 
         if (dev->work_end.tv_sec > 0) {
             double diff = tv_diff (&dev->work_start, &dev->work_end); // сколько прошло перед работой
@@ -586,6 +593,8 @@ int work_push(cgpu_info_t *cgpu, bitfury_device_p dev) {
 
 inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
 
+
+
     if (dev->job_switched && dev->work); else return 0;
 
     //
@@ -602,56 +611,26 @@ inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
 
     // новое задание - считается - закончено?
     // work=>>owork=>>o2work
-
-    /*
-         *
-        for (j = dev->results_n - 1; j >= 0; j--) {
-            if (owork) {
-                nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
-            }
-            if (o2work) {
-                // TEST
-                //submit_nonce(thr, owork, bswap_32(res[j]));
-            }
-        }
-
-
-        dev->results_n = 0;
-        dev->job_switched = 0;
-        if (dev->old_nonce && o2work)
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce));
-
-        if (dev->future_nonce)
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce));
-
-        if (o2work) {
-            work_completed(thr->cgpu, o2work);
-            double diff = tv_diff (&now, &dev->work_start);
-            dev->work_end = now;
-
-            if (dev->work_median == 0)
-                dev->work_median = diff;
-            else
-                dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
-        }
-        */
-
     for (j = dev->results_n-1; j >= 0; j--) {
         if (owork) {
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]));
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]) );
         }
     }
     dev->results_n = 0;
     dev->job_switched = 0;
-    if ((dev->old_num > 0) && o2work)
-        for(j = 0; j < dev->old_num; j++) {
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce[j]));
-        }
 
-    if (dev->future_num > 0)
-        for(j=0; j < dev->future_num; j++) {
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce[j]));
-        }
+    if ( (dev->old_num > 0) && o2work) {
+        for(j = 0; j < dev->old_num; j++)
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce[j]) );
+
+        dev->old_num = 0;
+    }
+
+    if (dev->future_num > 0) {
+        for(j=0; j < dev->future_num; j++)
+            nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce[j]) );
+        dev->future_num = 0;
+    }
 
     if (o2work) {
         work_completed(thr->cgpu, o2work);
@@ -665,11 +644,11 @@ inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
     }
 
 
+
     // сдвиг миниочереди
     dev->o2work = dev->owork;
     dev->owork = dev->work;
     dev->work = NULL;
-
     dev->works_shifted ++;     // для перестановки задания в конец живой очереди
     dev->matching_work += nonces_cnt;
     dev->found_last = 0;
@@ -687,12 +666,6 @@ uint64_t works_receive(thr_info_t *thr, bitfury_device_t *devices, int chip_coun
 
     return hashes;
 }
-
-
-
-
-
-
 
 int works_push(cgpu_info_t *cgpu) {
     // подготовка заданий для чипов
@@ -863,13 +836,14 @@ inline double speed_in_period(double *stat, double range_mcs, double now_mcs, in
 
 double collect_chip_stats (bitfury_device_p dev, int loop) {
 
+    double limit_frame = (double)short_stat * 16 * 1e6;  //
     // статистику стоит оценивать от последнего сброса устройства, иначе хрень будет.
     double now_mcs = tv2mcs ( get_cgtime() );
     double rst_msc = tv2mcs ( &dev->rst_time );
     double elps_eff = now_mcs - rst_msc;
-    // if (elps_eff > elps_mcs) elps_eff = elps_mcs;
 
-    if (elps_eff > 5e8) elps_eff = 5e8; // 500 seconds limit
+    if (elps_eff > limit_frame)
+        elps_eff = limit_frame; // 320 seconds limit
 
     int shares_found = 0;
 
@@ -885,7 +859,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
 
     // if slot changed
     if ( dev->fasync == 0 ) {
-        sprintf(s_line, "[%X]", n_slot );
+        sprintf(s_line, "[%X] ", n_slot);
     #ifdef BITFURY_MONITORING
         float slot_temp = 60; // tm_i2c_gettemp(n_slot) * 0.1;
         float slot_vc0 = tm_i2c_getcore0(n_slot) * 1000;
@@ -996,9 +970,9 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
 
 void check_not_hang(bitfury_device_p dev, double speed) {
 
-    if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
-
+    static unsigned recovers = 0;
 #ifdef  BITFURY_AUTOCLOCK
+    if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
     if ( dev->csw_back > 100 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
         dev->fixed_clk = false;
         dev->csw_count = 0;
@@ -1010,7 +984,7 @@ void check_not_hang(bitfury_device_p dev, double speed) {
     }
 #endif
 
-    if ( speed <= 1.35 || ( speed < 1.8 && speed < dev->prv_speed  ) ) {
+    if ( speed <= 1.2 || ( speed < 1.7 && speed < dev->prv_speed  ) ) {
         if ( dev->csw_back > 4 ) dev->alerts ++;
     }
     else dev->alerts = 0;
@@ -1019,8 +993,9 @@ void check_not_hang(bitfury_device_p dev, double speed) {
 
     // сброс чипа по совсем уж малому хэшрейту
     if ( 3 < dev->alerts ) {
+        recovers ++;
         printf(CL_LT_RED);
-        applog(LOG_WARNING, "Slot %X chip %X FREQ CHANGE-RESTORE", dev->slot, dev->fasync);
+        applog(LOG_WARNING, "Slot %X chip %X FREQ CHANGE-RESTORE, total recovers = %d", dev->slot, dev->fasync, recovers);
         printf(CL_RESET);
         send_shutdown(dev->slot, dev->fasync);
         nmsleep(100);
@@ -1054,7 +1029,6 @@ static int64_t try_scanHash(thr_info_t *thr)
 
 #define BIG_LINE_LENGTH 16384
     unsigned char line[BIG_LINE_LENGTH];
-    int short_stat = 20;
     static time_t short_out_t = 0;
     static double short_out_tf = 0;
     int long_stat = 900;
@@ -1078,7 +1052,7 @@ static int64_t try_scanHash(thr_info_t *thr)
 
     devices = thr->cgpu->devices;
     chip_count = thr->cgpu->chip_count;
-#define USE_LIVE_ORDER
+
 #ifdef  USE_LIVE_ORDER
     static bitfury_device_p live_devs[BITFURY_MAXCHIPS] = { NULL };
     // в первый цикл заполнить по порядку
@@ -1107,22 +1081,20 @@ static int64_t try_scanHash(thr_info_t *thr)
 
     }
 
-
-
     last_call = now;
     cgtime(&last_call);
-
 
     // hashes += works_receive(thr, devices, chip_count);
     works_push (thr->cgpu);
 
 #ifdef BITFURY_HARD_LOAD
+    nmsleep(150);
     libbitfury_sendHashData(thr, devices, chip_count);
     hashes += works_receive(thr, devices, chip_count);
 #else
+    int last_slot = -1;
  #ifdef USE_LIVE_ORDER
     int tmp;
-    int last_slot = -1;
 
     for (tmp = 0; tmp < 10; tmp ++) {
         libbitfury_sendHashOne (thr, live_devs[0], &last_slot); // 3-5ms load
@@ -1167,11 +1139,12 @@ static int64_t try_scanHash(thr_info_t *thr)
 
  #else
 
+    nmsleep(15);
     for (i = 0; i < chip_count; i ++)
         if ( devices[i].slot == active_slot ) {
-             libbitfury_sendHashOne (thr, &devices[i], &last_slot);
-             hashes += work_receive (thr, &devices[i]);
-             nusleep (interval);
+             bitfury_device_p d = &devices[i];
+             libbitfury_sendHashOne (thr, d, &last_slot);
+             hashes += work_receive (thr, d);
         }
     // выбор другого активного слота (!)
     do {
@@ -1180,14 +1153,15 @@ static int64_t try_scanHash(thr_info_t *thr)
             active_slot = 0;
     } while ( !chips_in_slot[active_slot] );
  #endif
+
  if (last_slot >= 0)
      tm_i2c_clear_oe(last_slot);
-
-
 #endif
 
 
     cgtime(&now);
+
+
     now_mcs = tv2mcs (&now);
 
     if (!short_out_t) {
@@ -1223,8 +1197,6 @@ static int64_t try_scanHash(thr_info_t *thr)
         double gh[BITFURY_MAXBANKS][BITFURY_BANKCHIPS] = {0};
 
         double ghsum = 0, gh1h = 0, gh2h = 0;
-
-
         stat_dumps ++;
 
         int maskv = stat_dumps & 15;
@@ -1247,8 +1219,8 @@ static int64_t try_scanHash(thr_info_t *thr)
            gh[dev->slot][dev->fasync] = speed;
 
 
-           // для проверки на зависания лучше оценивать последний период 10-20с
-           speed = speed_in_period(dev->stat_tsf, elps_mcs, now_mcs, &k);
+           // для проверки на зависания лучше оценивать последний период 60с
+           speed = speed_in_period(dev->stat_tsf, 60 * 1e6, now_mcs, &k);
            check_not_hang (dev, speed); // проверки на слишком маленькую частоту
         }
 
@@ -1580,6 +1552,7 @@ static struct api_data *bitfury_api_stats(struct cgpu_info *cgpu)
         total_hw += devices[i].hw_errors;
     }
     for (i = 0; i < cgpu->chip_count; i++) {
+        // shares_found = calc_stat_f (devices[i].stat_tsf, BITFURY_API_STATS, tv2mcs(&now));
         shares_found = calc_stat(devices[i].stat_ts, BITFURY_API_STATS, now);
         ghash = shares_to_ghashes(shares_found, (double)BITFURY_API_STATS);
         ghash_sum += ghash;
