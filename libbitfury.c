@@ -814,19 +814,20 @@ inline int single_read(unsigned *newbuf, unsigned offset) {
 
 int triple_read(unsigned *newbuf, unsigned offset) {
 
+    int n;
     unsigned b0[17 * 4];
     unsigned b1[17 * 4];
     unsigned b2[17 * 4];
 
-    while ( !single_read(b0, offset) );
-    while ( !single_read(b1, offset) );
+    for (n = 0; n < 3 && !single_read(b0, offset); n ++);
+    for (n = 0; n < 3 && !single_read(b1, offset); n ++);
 
 
     if ( eq_count(b0, b1) >= 13) {
         memcpy(newbuf, b1, NONCES_BUFF_SZ);
         return NONCES_BUFF_SZ;
     }
-    while ( !single_read(b2, offset) );
+    for (n = 0; n < 3 && !single_read(b2, offset); n ++);
 
     if ( eq_count(b1, b2) >= 13 || eq_count(b0, b2) >= 13 ) {
         memcpy(newbuf, b2, NONCES_BUFF_SZ);
@@ -868,16 +869,14 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
         // nusleep(85);
         tm_i2c_set_oe(slot);
         last_slot[0] = slot;
-        nmsleep(1);
+        // nmsleep(1);
         // nmsleep(53); // пробная пауза
     }
 
-#if 0
+#if 1
     if (1 == second_run) {
         // распределение заданий равномерно в течении цикла
-        int delay = ( 1300 / thr->cgpu->chip_count ) - 70;
-        if (delay > 0)
-            nmsleep(delay);
+        nmsleep(30);
     }
 #endif
     // prepare work
