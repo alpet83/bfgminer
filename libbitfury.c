@@ -687,23 +687,23 @@ inline int handle_result (struct thr_info *thr, struct bitfury_device *d, unsign
     // сразу после переключения частоты ошибки не засчитывать, т.к. бывает иногда много
     if (fl < 1 && 0 == dups && d->csw_back > 0 && 0xE0 != (char)src ) {
         dbg[i * 2] = 0x45;
-        d->hw_errors++;
-#ifdef BFGMINER_MOD
-        inc_hw_errors2(thr, d->o2work, &pn);
-#else
-        inc_hw_errors(thr);
-#endif
-
         return -1;
     }
 
     if (dups)
         dbg[i * 2 + 1] = 0x64;
 
-
-
-
     return fl;
+}
+
+inline void reg_hw_error(struct thr_info *thr, struct bitfury_device *d, unsigned pn) {
+    d->hw_errors++;
+#ifdef BFGMINER_MOD
+    inc_hw_errors2(thr, d->o2work, &pn);
+#else
+    inc_hw_errors(thr);
+#endif
+
 }
 
 inline int eq_count(unsigned *old, unsigned *buff) {
@@ -798,13 +798,17 @@ inline int single_read(unsigned *newbuf, unsigned offset) {
     char *txbuff = spi_gettxbuf();
     char *rxbuff = spi_getrxbuf();
     size_t size = spi_getbufsz();
+
     spi_txrx (txbuff, rxbuff, size);
-    if (size >= NONCES_BUFF_SZ) {
+    if (size >= NONCES_BUFF_SZ + offset) {
         memcpy(newbuf, rxbuff + offset, NONCES_BUFF_SZ);
-        return NONCES_BUFF_SZ;
+        int i = 0;
+        // тут удостоверяемся что чип вернул нужное значение
+        for (i = 0; i < 16; i ++)
+            if ( 0xE0 == (newbuf[i] & 0xFF) )
+                 return NONCES_BUFF_SZ;
     }
-    else
-        return 0;
+    return 0;
 }
 
 
@@ -814,21 +818,21 @@ int triple_read(unsigned *newbuf, unsigned offset) {
     unsigned b1[17 * 4];
     unsigned b2[17 * 4];
 
-    if ( single_read(b0, offset) && single_read(b1, offset) ) {
-        if ( eq_count(b0, b1) >= 13) {
-            memcpy(newbuf, b1, NONCES_BUFF_SZ);
-            return NONCES_BUFF_SZ;
-        }
-        single_read(b2, offset);
+    while ( !single_read(b0, offset) );
+    while ( !single_read(b1, offset) );
 
-        if ( eq_count(b1, b2) >= 13 || eq_count(b0, b2) >= 13 ) {
-            memcpy(newbuf, b2, NONCES_BUFF_SZ);
-            return NONCES_BUFF_SZ;
-        }
+
+    if ( eq_count(b0, b1) >= 13) {
+        memcpy(newbuf, b1, NONCES_BUFF_SZ);
+        return NONCES_BUFF_SZ;
     }
+    while ( !single_read(b2, offset) );
 
-    return 0;
-
+    if ( eq_count(b1, b2) >= 13 || eq_count(b0, b2) >= 13 ) {
+        memcpy(newbuf, b2, NONCES_BUFF_SZ);
+        return NONCES_BUFF_SZ;
+    }
+     return 0;
 }
 
 
@@ -864,7 +868,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
         // nusleep(85);
         tm_i2c_set_oe(slot);
         last_slot[0] = slot;
-        // nmsleep(1);
+        nmsleep(1);
         // nmsleep(53); // пробная пауза
     }
 
@@ -931,21 +935,19 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
         }
 #endif
 
-        if ( !newbuf[16] || 0xffffffff == newbuf[16] )
+        if ( 0 == newbuf[16] || 0 == !newbuf[16] )
              d->job_switched = ( newbuf[16] != oldbuf[16] && second_run >= 2 );
         else
             applog(LOG_WARNING, "Unexpected value in newbuf[16] == 0x%08x", newbuf[16]);
 
         for (i = 0; i < 16; i++)
             if ( oldbuf[i] != newbuf[i] ) {
-                d->eqcntr [i] = 0;
+                d->eqcntr [i] = 1;
                 unsigned b = newbuf[i];
                 b &= 0xFF;
                 if ( b != 0xE0 )
                      d->eqcntr[i] = 1; // это с некоторой вероятностью nonce?
-
-                d->eqcntr [i] = 1;
-
+                // d->eqcntr [i] = 1;
                 oldbuf[i] = newbuf[i];
             }
             else
@@ -962,20 +964,22 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
             i = d->index;
             unsigned pn = newbuf[i];
             d->index = ( d->index + 1 ) & 0x0F;
-            if ( d->eqcntr[i] < 2 && 0xE0 == (char)pn ) continue; // просто перебор
+            unsigned stable = d->eqcntr[i]; // счетчик стабильности результата
 
-            if ( d->eqcntr[i] > 0 && pn != tested [i] ) {
-                tested [i] = pn;
-
-
-
+            if ( stable  < 2 && 0xE0 == (char)pn ) continue; // просто перебор
+            if ( stable > 0 && pn != tested [i] ) {
                 int fc = handle_result (thr, d, pn, i, ffirst);
-                if (fc < 0) {
+                // за ошибку результат считается только если он стабилен
+                if (fc < 0 && stable > 1 ) {
                     errc ++;
+                    reg_hw_error (thr, d, pn);
                     d->eqcntr[i] = 0;
                     d->acvals[i] = pn;
+                    tested [i] = pn;
                 }
+
                 if (fc >= 0) {
+                    tested [i] = pn;
                     found += fc;
 #ifdef HW_PROTECT
                     d->acvals[i] = pn; // not reversed/not decremented

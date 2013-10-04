@@ -1138,8 +1138,7 @@ static int64_t try_scanHash(thr_info_t *thr)
     } // for tmp
 
  #else
-
-    nmsleep(15);
+    nmsleep(10);
     for (i = 0; i < chip_count; i ++)
         if ( devices[i].slot == active_slot ) {
              bitfury_device_p d = &devices[i];

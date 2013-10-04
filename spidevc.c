@@ -42,7 +42,7 @@ static int fd;
 
 static int mode = 0, bits = 8;
 #ifdef BITFURY_METABANK
-static int speed = 2000000;
+static int speed = 3000000;
 #else
 static int speed = 4000000;
 #endif
