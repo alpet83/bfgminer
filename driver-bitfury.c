@@ -658,13 +658,15 @@ inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
             applog(LOG_WARNING, "#PERF: chip %d_%X work_time = %.3f sec", dev->fasync, dev->slot, diff / 1e6);
 
         // при первом запуске задания пичкаются быстро из-за буферизации, задержка маленькая (?). Скорость 6Гх+ стоит считать абсурдом...
-        if ( diff > 500 ) {
+        // фильтруем 777 мс
+        if ( diff > 777000 ) {
 
             if (dev->work_median == 0)
                 dev->work_median = diff;
             else
                 dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
         }
+        // dev->work->tv_work_start
     }
 
     dev->results_n = 0;
@@ -1355,7 +1357,7 @@ static int64_t try_scanHash(thr_info_t *thr)
         prv_total_results = total_results;
 
         double rr_chip = 1e6 * (double)i / ( (double)chip_count * elps_mcs );
-        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, time to long stat %3ds, median_work = %.1f ms, busy = %7d, ready = %7d, results = %5d, rr_chip = %.2f/s ",
+        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, time to long stat %3ds, median_loop = %.1f ms, busy = %7d, ready = %7d, results = %5d, rr_chip = %.2f/s ",
                ghsm_saldo, long_stat - elapsed, median_load * 0.001, busy_count, ready_count, total_results, rr_chip  );
 
         applog(LOG_WARNING, line);
