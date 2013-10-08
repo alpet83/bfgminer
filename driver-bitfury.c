@@ -24,7 +24,7 @@
  *
 */
 
-
+#include "btypes.h"
 #include "miner.h"
 #include <math.h>
 #include <unistd.h>
@@ -52,10 +52,6 @@
 
 
 
-typedef struct thr_info thr_info_t;
-typedef struct timeval timeval_t;
-typedef struct cgpu_info cgpu_info_t;
-typedef timeval_t *timeval_p;
 
 struct device_drv bitfury_drv;
 
@@ -63,6 +59,8 @@ struct device_drv bitfury_drv;
 
 const int short_stat = 20;
 
+int total_results = 0;
+int heavy_results = 0;
 unsigned loops_count = 0;
 unsigned call_count = 0;
 static int last_chip = 0; // для кольцевого обхода по выдаче заданий
@@ -178,32 +176,35 @@ static void bitfury_detect(void)
 
 static uint32_t bitfury_checkNonce(struct work *work, uint32_t nonce)
 {
-    applog(LOG_INFO, "INFO: bitfury_checkNonce");
+    // applog(LOG_INFO, "INFO: bitfury_checkNonce");
 }
 
-static int bitfury_submitNonce(thr_info_t *thr, bitfury_device_t *device, struct timeval *now, struct work *owork, uint32_t nonce)
+inline int bitfury_submitNonce(thr_info_t *thr, bitfury_device_t *device, struct timeval *now, struct work *owork, uint32_t nonce)
 {
     int i;
     int is_dupe = 0;
 
     for (i=0; i < 32; i++) {
-        if(device->nonces[i] == nonce) {
+        if( device->nonces[i] == nonce ) {
             is_dupe = 1;
             break;
         }
     }
 
     if(!is_dupe) {
-        submit_nonce(thr, owork, nonce);
-        device->nonces[device->current_nonce++] = nonce;
-        if(device->current_nonce > 32)
-            device->current_nonce = 0;
-        i = device->stat_counter++;
-        device->stat_ts [i] = now->tv_sec;
-        device->stat_tsf[i] = tv2mcs(now);
+        if ( submit_nonce(thr, owork, nonce) ) {
+            device->nonces[device->current_nonce++] = nonce;
+            if( device->current_nonce > 32 )
+                device->current_nonce = 0;
+            i = device->stat_counter++;
+            device->stat_ts [i] = now->tv_sec;
+            device->stat_tsf[i] = tv2mcs(now);
 
-        if (device->stat_counter == BITFURY_STAT_N)
-            device->stat_counter = 0;
+            if (device->stat_counter == BITFURY_STAT_N)
+                device->stat_counter = 0;
+        }
+        else
+            return 0;
     }
 
     return (!is_dupe);
@@ -260,10 +261,12 @@ inline void test_reclock(bitfury_device_p dev) {
          dev->osc6_bits = dev->osc6_bits_upd;
          send_freq( dev->slot, dev->fasync, dev->osc6_bits );
          cgtime (&dev->rst_time);
+         dev->alerts = 0;
          dev->csw_count ++;
          dev->csw_back = 0;
-
-
+         dev->hw_errors = 0;
+         dev->matching_work = 0;
+         dev->work_median = 0;
     }
 }
 
@@ -523,14 +526,23 @@ static bool bitfury_fill(struct cgpu_info *cgpu) {
 #ifdef BITFURY_HARD_LOAD
     int max_need = MAX (4, cgpu->chip_count / 2);
 #else
-    int max_need = 10;
+  #if WORK_FRAME <= 50
+    int max_need = 20;
+  #else
+    int max_need = MAX (20, cgpu->chip_count / 2);
+  #endif
 #endif
 
     if (max_need > PREFETCH_WORKS)
         max_need = PREFETCH_WORKS;
 
-    int now_need =  ( max_need - works_prefetched(cgpu) );
+    int now_have = works_prefetched(cgpu);
+    int now_need =( max_need - now_have );
+    if (!now_have)
+        applog(LOG_WARNING, "#PERF: no prefetched works.");
     ret = ( now_need <= 0 ); // need find optimal values
+
+
 
     if (ret) return ret;
     nw = get_queued (cgpu);
@@ -607,43 +619,56 @@ inline uint64_t work_receive(thr_info_t *thr, bitfury_device_p dev) {
     struct work *work = dev->work;
     struct work *owork = dev->owork;
     struct work *o2work = dev->o2work;
+
+
     cgtime(&now);
 
     // новое задание - считается - закончено?
-    // work=>>owork=>>o2work
-    for (j = dev->results_n-1; j >= 0; j--) {
-        if (owork) {
-            nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]) );
-        }
-    }
-    dev->results_n = 0;
-    dev->job_switched = 0;
+    // o2work - выбывающее задание
+    // owork  - решаемое чипом задание
+    //  work  - новейшее задание
 
-    if ( (dev->old_num > 0) && o2work) {
+    for (j = 0; j < dev->results_n && owork; j++)
+         nonces_cnt += bitfury_submitNonce(thr, dev, &now, owork, bswap_32(res[j]) );
+
+    if ( dev->old_num > 0 && o2work) {
         for(j = 0; j < dev->old_num; j++)
             nonces_cnt += bitfury_submitNonce(thr, dev, &now, o2work, bswap_32(dev->old_nonce[j]) );
-
         dev->old_num = 0;
     }
 
-    if (dev->future_num > 0) {
+    if (dev->future_num > 0 && work) {
         for(j=0; j < dev->future_num; j++)
             nonces_cnt += bitfury_submitNonce(thr, dev, &now, work, bswap_32(dev->future_nonce[j]) );
         dev->future_num = 0;
     }
 
+    total_results += nonces_cnt;
+
+    if ( nonces_cnt >= 32 )
+        applog(LOG_WARNING, "#WARNING: To many results = %2d", nonces_cnt);
+
     if (o2work) {
+
         work_completed(thr->cgpu, o2work);
         double diff = tv_diff (&now, &dev->work_start);
         dev->work_end = now;
 
-        if (dev->work_median == 0)
-            dev->work_median = diff;
-        else
-            dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
+        if (dev->csw_back > 4 && diff > 2 * 1e6)
+            applog(LOG_WARNING, "#PERF: chip %d_%X work_time = %.3f sec", dev->fasync, dev->slot, diff / 1e6);
+
+        // при первом запуске задания пичкаются быстро из-за буферизации, задержка маленькая (?). Скорость 6Гх+ стоит считать абсурдом...
+        if ( diff > 500 ) {
+
+            if (dev->work_median == 0)
+                dev->work_median = diff;
+            else
+                dev->work_median = dev->work_median * 0.993 + diff *0.007; // EMA
+        }
     }
 
-
+    dev->results_n = 0;
+    dev->job_switched = 0;
 
     // сдвиг миниочереди
     dev->o2work = dev->owork;
@@ -783,24 +808,31 @@ int relative_bits_index(bitfury_device_p dev) {
 
 
 void freq_bruteforce(bitfury_device_p dev) {
+
+#define RANGE_MASK 3
     int ridx = relative_bits_index(dev);
     int new_clk = ridx;
-    float best = 3; // extremum Ghz for 54 clk
-    best = dev->rbc_stat[ridx];
+    float best = dev->rbc_stat[ridx];
     int i, csum = 0;
     int test_count = 4;
     for (i = 0; i < 4; i ++) csum += dev->cch_stat[i];
+
     if ( csum > 2 )
          test_count = 2;
 
-    if ( dev->csw_count < test_count ) {
+    dev->testing = ( dev->csw_count < test_count ); // во время брутфорса защита молчит
+
+    if ( dev->testing ) {
+
 
         int optimal = 1;
-        if ( csum > 4 ) optimal = dev->cch_stat[ridx]; // probably best choice
+        if ( csum > 4 )
+             optimal = dev->cch_stat[ridx]; // probably best choice
 
-        new_clk = ( ridx + 1 ) & 3; // masked enum
+        new_clk = ( ridx + 1 ) & RANGE_MASK; // masked enum
+
         while ( csum > 2 && dev->cch_stat[new_clk] < optimal )
-                new_clk = ( new_clk + 1 ) & 3; // дополнительные циклы - пропуск неоптимальных выборов
+                new_clk = ( new_clk + 1 ) & RANGE_MASK; // дополнительные циклы - пропуск неоптимальных выборов
     }
     else
     if ( best < 4 && dev->csw_count < test_count + 1 ) {
@@ -816,6 +848,7 @@ void freq_bruteforce(bitfury_device_p dev) {
         // подведение итогов соревнования
         // если произошла смена к удачной конфигурации или было мало регистраций выбора
         if ( ridx != new_clk || dev->cch_stat[new_clk] < 2 ) dev->cch_stat[new_clk] ++;
+
     }
 
     new_clk = new_clk + BASE_OSC_BITS;
@@ -895,14 +928,10 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     alt_gh = ghash;
 
     float hw_errs = (float) dev->hw_errors;
-    float saldo = hw_errs + shares_found; // TODO: проверить, нужно ли добавить режики?
-
-
-    if ( dev->work_median > 0 )
-         alt_gh = 3e6 / dev->work_median;
+    float saldo = hw_errs + dev->matching_work; // TODO: проверить, нужно ли добавить режики?
 
     if (saldo > 0)
-       hw_errs = 100 * hw_errs / saldo;
+       hw_errs = 100.0 * hw_errs / saldo;
     else
        hw_errs = 0;
 
@@ -911,21 +940,44 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     else
        dev->hw_rate = dev->hw_rate * 0.93 + hw_errs * 0.07; // EMA 16
 
+
+    if ( dev->work_median > 0 ) {
+        // в чипе 756 ядер, значит сканируется около 2/3 диапазона в 4Гх
+        double nalog = 0.0;
+        alt_gh =  ( 4.295e6 / 1024 * 756 ) / dev->work_median;
+        if (dev->hw_rate <= 100)
+            nalog += 0.01 * (double) dev->hw_rate; // вычитать ошибки из такого хэшрейта
+
+        alt_gh *= ( 1 - nalog );  // коррекция на ожидаемый пропуск результатов (+HW). Возможно отдельные ядра бракованные
+
+    }
+
+
     int ridx = dev->osc6_bits - BASE_OSC_BITS;
+    shares_total += shares_found;
+    shares_first += i_chip  < BITFURY_BANKCHIPS/2 ? shares_found : 0;
+    shares_last  += i_chip >= BITFURY_BANKCHIPS/2 ? shares_found : 0;
+
+
+    if (dev->csw_back)
+        ghash = alt_gh;
+
+    if (ridx < 0 || ridx > 3) return ghash;
+
     dev->rbc_stat[ridx] = ghash;
 
     char *cl_tag = " ";
 
+    int rr = ghash2int ( dev->rbc_stat[ridx] );
 
-    if ( ghash <= 2.0 ) cl_tag = " -";
-    if ( ghash <= 1.5 ) cl_tag = "--";
-    if ( ghash <= 1.0 ) cl_tag = " !";
-    if ( ghash <= 0.5 ) cl_tag = "!!";
+    if ( rr <= 20 ) cl_tag = " -";
+    if ( rr <= 15 ) cl_tag = "--";
+    if ( rr <= 10 ) cl_tag = " !";
+    if ( rr <= 05 ) cl_tag = "!!";
+    if ( rr >= 30 ) cl_tag = " +";
+    if ( rr >= 40 ) cl_tag = "++";
 
-    if ( ghash >= 3.0 ) cl_tag = " +";
-    if ( ghash >= 4.0 ) cl_tag = "++";
 
-    int rr = ghash2int (ghash);
     chips_by_rate [rr] ++;      // не более chip_count сумма по всем массиву быть должна
     if (dev->csw_back > 12) // если после переключения прошло много времени, и производительность стабилизировалась.
         dev->big_stat[ridx][rr] ++; // для получения детального отчета по чипу
@@ -934,7 +986,7 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
     if ( loop < 15 ) {
 
         if ( loop > 13  && dev->work_median > 0 )
-            snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2.0f @ @%2d | ", 10 * alt_gh, dev->osc6_bits ); // speed from work-time, wait time
+            snprintf(s_line + len, STAT_LINE_LENGTH - len, "  %2d @ %2d | ", rr, dev->osc6_bits ); // speed from work-time, wait time
         else
             snprintf(s_line + len, STAT_LINE_LENGTH - len, "%2s%2d -%5.1f | ", cl_tag, rr, dev->hw_rate ); // speed and errors
     }
@@ -957,12 +1009,6 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
         snprintf( stat_lines[n_slot] + len, STAT_LINE_LENGTH - len, "%c%2.0f%c%2.0f%c%2.0f%c%2.0f| ", s[0], h0, s[1], h1, s[2], h2, s[3], h3, s[4] ); // intermediate dump clock
     }
 
-    shares_total += shares_found;
-    shares_first += i_chip  < BITFURY_BANKCHIPS/2 ? shares_found : 0;
-    shares_last  += i_chip >= BITFURY_BANKCHIPS/2 ? shares_found : 0;
-
-    dev->hw_errors = 0;
-
 
     return ghash;
 
@@ -984,30 +1030,48 @@ void check_not_hang(bitfury_device_p dev, double speed) {
     }
 #endif
 
-    if ( speed <= 1.2 || ( speed < 1.7 && speed < dev->prv_speed  ) ) {
+    if (dev->testing) return;
+
+    if ( speed <= 1.2 || ( speed < 1.7 && speed < dev->prv_speed ) || dev->hw_rate > 33 ) {
         if ( dev->csw_back > 4 ) dev->alerts ++;
     }
     else dev->alerts = 0;
 
     dev->prv_speed = speed;
 
-    // сброс чипа по совсем уж малому хэшрейту
-    if ( 3 < dev->alerts ) {
+
+    double work_time = 0;
+
+    timeval_t now;
+    cgtime(&now);
+
+    if (dev->csw_back && dev->work_start.tv_sec > 0) {
+        work_time = tv_diff (&now, &(dev->work_start) );
+    }
+
+    // сброс чипа по совсем уж малому хэшрейту или подвисанию 120s
+    if ( 3 < dev->alerts || work_time > 1.2e8 ) {
         recovers ++;
         printf(CL_LT_RED);
-        applog(LOG_WARNING, "Slot %X chip %X FREQ CHANGE-RESTORE, total recovers = %d", dev->slot, dev->fasync, recovers);
+        applog(LOG_WARNING, "Slot %X chip %X, work_time = %.0f ms, FREQ CHANGE-RESTORE, osc6_bits = %d, total recovers = %d",
+                                dev->slot, dev->fasync, work_time * 0.001, dev->osc6_bits, recovers);
         printf(CL_RESET);
         send_shutdown(dev->slot, dev->fasync);
         nmsleep(100);
-        send_reinit(dev->slot, dev->fasync, 53); // fail-safe
-        dev->fixed_clk = false;
+        // if ( dev->osc6_bits_upd > BASE_OSC_BITS ) dev->osc6_bits_upd --;
+        send_reinit(dev->slot, dev->fasync, dev->osc6_bits_upd); // fail-safe
+        // dev->fixed_clk = false;
+
+        dev->osc6_bits = dev->osc6_bits_upd;
         dev->alerts = 0;
         dev->csw_back = 0;
         dev->csw_count ++;
+        dev->work_median = 0;
+        dev->hw_errors = 0;
+        dev->matching_work = 0;
 
         memset (dev->oldbuf, 0, sizeof(dev->oldbuf));
         memset (dev->tsvals, 0, sizeof(dev->tsvals));
-
         cgtime (&dev->rst_time);
         dev->cch_stat[0] = dev->cch_stat[1] = dev->cch_stat[2] = dev->cch_stat[3] = 0; // полный сброс статистики автоподбора
     }
@@ -1138,7 +1202,6 @@ static int64_t try_scanHash(thr_info_t *thr)
     } // for tmp
 
  #else
-    // nmsleep(10);
     for (i = 0; i < chip_count; i ++)
         if ( devices[i].slot == active_slot ) {
              bitfury_device_p d = &devices[i];
@@ -1287,9 +1350,13 @@ static int64_t try_scanHash(thr_info_t *thr)
         elapsed = now.tv_sec - long_out_t;
         printf("\e[37;40m\r");
 
+        static int prv_total_results = 0;
+        i = total_results - prv_total_results;
+        prv_total_results = total_results;
 
-        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, interval = %d mcs, seconds to long stat %5d, median_load = %.1f ms, busy = %7d, ready = %7d ",
-                                ghsm_saldo, interval, long_stat - elapsed, median_load * 0.001, busy_count, ready_count );
+        double rr_chip = 1e6 * (double)i / ( (double)chip_count * elps_mcs );
+        applog(LOG_WARNING, "Median hash-rate saldo = %4.1f, time to long stat %3ds, median_work = %.1f ms, busy = %7d, ready = %7d, results = %5d, rr_chip = %.2f/s ",
+               ghsm_saldo, long_stat - elapsed, median_load * 0.001, busy_count, ready_count, total_results, rr_chip  );
 
         applog(LOG_WARNING, line);
         busy_count = ready_count = 0;
@@ -1378,7 +1445,7 @@ static int64_t bitfury_scanHash(thr_info_t *thr) {
 #endif
      int ms = 1;
 #ifdef BFGMINER_MOD
-     nmsleep (ms);
+     // nmsleep (ms);
 #else
      nmsleep (1);
      // if ( 0 == result ) nmsleep ( BITFURY_SCANHASH_DELAY - (int)time_ms ); // strict loop time

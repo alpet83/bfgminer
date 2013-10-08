@@ -1,6 +1,8 @@
 #ifndef __DRIVER_CONFIG_H__
 #define __DRIVER_CONFIG_H__
 
+#include "btypes.h"
+
 // here controlled stats and performance driver-bitfury
 
 #define BITFURY_ENABLE_LONG_STAT 1
@@ -15,7 +17,7 @@
 // processing all chips every cycle (remains about 500ms)
 // #define BITFURY_HARD_LOAD
 // #define USE_LIVE_ORDER
-#define WORK_FRAME 30
+#define WORK_FRAME 200
 // #define DOUBLE_TEST
 
 // print by chip stats in log files in /var/log/bitfury
@@ -24,6 +26,8 @@
 #ifdef BFGMINER_MOD
 #define nmsleep cgsleep_ms
 #define nusleep cgsleep_us
+
+void format_time(timeval_p tv, char *datetime);
 #endif
 
 #ifdef FAST_CLOCK1
@@ -33,5 +37,6 @@
         #define BASE_OSC_BITS 53
         #define LOW_HASHRATE 1.5
 #endif
+
 
 #endif

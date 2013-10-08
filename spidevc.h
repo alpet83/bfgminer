@@ -20,7 +20,9 @@
 #define SPIDEVC_H
 
 /* Initialize SPI using this function */
+int  spi_fd();
 void spi_init(void);
+
 
 /* TX-RX single frame */
 int spi_txrx(const char *wrbuf, char *rdbuf, int bufsz);

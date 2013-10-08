@@ -2868,7 +2868,7 @@ void get_statline3(char *buf, size_t bufsz, struct cgpu_info *cgpu, bool for_cur
 	{
 		percentf4(rejpcbuf, sizeof(rejpcbuf), wnotaccepted, waccepted);
 		percentf3(bnbuf, sizeof(bnbuf), badnonces, allnonces);
-		tailsprintf(buf, bufsz, "%ds:%s avg:%s u:%s | A:%d R:%d+%d(%s) HW:%d/%s",
+        tailsprintf(buf, bufsz, "%ds:%s avg:%s u:%s | A:%d R:%d+%d(%s) HW:%d/%s \n",
 			opt_log_interval,
 			cHr, aHr, uHr,
 			accepted,
@@ -5908,7 +5908,7 @@ void zero_stats(void)
 	local_work = 0;
 	total_go = 0;
 	total_ro = 0;
-	total_secs = 1.0;
+    total_secs = 1.0;
 	total_diff1 = 0;
 	total_bad_nonces = 0;
 	found_blocks = 0;
@@ -6825,13 +6825,12 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	showlog = true;
 	cgtime(&total_tv_end);
 
-	local_secs = (double)total_diff.tv_sec + ((double)total_diff.tv_usec / 1000000.0);
+    local_secs = (double)total_diff.tv_sec + ((double)total_diff.tv_usec / 1000000.0);
 	decay_time(&rolling, local_mhashes_done / local_secs, local_secs);
 	global_hashrate = roundl(rolling) * 1000000;
 
 	timersub(&total_tv_end, &total_tv_start, &total_diff);
-	total_secs = (double)total_diff.tv_sec +
-		((double)total_diff.tv_usec / 1000000.0);
+    total_secs = (double)total_diff.tv_sec + ((double)total_diff.tv_usec / 1e6 );
 
 	multi_format_unit_array2(
 		((char*[]){cHr, aHr, uHr}),
@@ -6840,7 +6839,9 @@ static void hashmeter(int thr_id, struct timeval *diff,
 		3,
 		1e6*rolling,
 		1e6*total_mhashes_done / total_secs,
-		utility_to_hashrate(total_diff_accepted / (total_secs ?: 1) * 60));
+        utility_to_hashrate(total_diff_accepted / (total_secs?: 1) * 60));
+
+
 
 #ifdef HAVE_CURSES
 	if (curses_active_locked()) {
@@ -6915,7 +6916,7 @@ static void hashmeter(int thr_id, struct timeval *diff,
 	percentf3(bnbuf, sizeof(bnbuf), total_bad_nonces, total_diff1);
 	
 	snprintf(logstatusline, sizeof(logstatusline),
-	         "%s%ds:%s avg:%s u:%s | A:%d R:%d+%d(%s) HW:%d/%s",
+             "%s%ds:%s avg:%s real:%s | A:%d R:%d+%d(%s) HW:%d/%s Elapsed: %.1f \n",
 		want_per_device_stats ? "ALL " : "",
 		opt_log_interval,
 		cHr, aHr,
@@ -6925,7 +6926,8 @@ static void hashmeter(int thr_id, struct timeval *diff,
 		total_stale,
 		rejpcbuf,
 		hw_errors,
-		bnbuf
+        bnbuf,
+        total_secs
 	);
 
 

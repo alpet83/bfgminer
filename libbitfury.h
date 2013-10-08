@@ -78,6 +78,8 @@ struct bitfury_device {
     struct work *o2work;
     struct timeval work_start;
     struct timeval work_end;
+    struct timeval ask_after; // для планирования опроса
+
     double work_median;  // median time in microseconds
     double work_wait;    // средний простой в ожидании работы
 	int job_switched;
@@ -123,6 +125,7 @@ struct bitfury_device {
     int              cch_stat[4];     // clock choice stat: сколько выбирался каждый клок по итогам соревнования
     int              csw_back;        // clock switch back: сколько статистики прошло, после переключения частоты
     int              csw_count;       // clock switch count: сколько раз сменялась частота принудительно
+    bool             testing;         // для блокады защитного сброса (выставляется во время тестирования)
     struct timeval   rst_time;        // reset time: когда устройство сбрасывалось последний раз
 
 	unsigned int matching_work;    
