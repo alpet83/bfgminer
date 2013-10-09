@@ -42,9 +42,9 @@ static int fd;
 
 static int mode = 0, bits = 0, txrx_delay = 200;
 #ifdef BITFURY_METABANK
-static int speed = 4000000;
+int spi_speed = 250000; // here only initial value. See in libbitfury.c override
 #else
-static int speed = 4000000;
+int spi_speed = 4000000;
 #endif
 
 int spi_fd() {
@@ -110,12 +110,12 @@ void spi_init(void)
 		close(fd);
 		exit(1);
 	}
-        if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
+        if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &spi_speed) < 0) {
 		perror("Unable to set WR_MAX_SPEED_HZ");
 		close(fd);
 		exit(1);
 	}
-        if (ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed) < 0) {
+        if (ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &spi_speed) < 0) {
 		perror("Unable to set RD_MAX_SPEED_HZ");
 		close(fd);
 		exit(1);
@@ -177,7 +177,7 @@ int spi_txrx(const char *wrbuf, char *rdbuf, int bufsz)
         tr[rv].rx_buf = (uintptr_t) rdbuf;
         tr[rv].len = 4096;
         tr[rv].delay_usecs = txrx_delay;
-        tr[rv].speed_hz = speed;
+        tr[rv].speed_hz = spi_speed;
         tr[rv].bits_per_word = bits;
         bufsz -= 4096;
         wrbuf += 4096; rdbuf += 4096; rv ++;
@@ -187,7 +187,7 @@ int spi_txrx(const char *wrbuf, char *rdbuf, int bufsz)
         tr[rv].rx_buf = (uintptr_t) rdbuf;
         tr[rv].len = (unsigned)bufsz;
         tr[rv].delay_usecs = txrx_delay;
-        tr[rv].speed_hz = speed;
+        tr[rv].speed_hz = spi_speed;
         tr[rv].bits_per_word = bits;
         rv ++;
     }

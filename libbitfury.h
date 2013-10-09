@@ -116,6 +116,7 @@ struct bitfury_device {
 	unsigned hw_errors;
 
     int              alerts;
+    int              recovers;        // сколько было попыток восстановления
     float            eff_speed;       // рассчитывается из big_stat
     float            prv_speed;       // для оценки "начала забастовки"
     float            hw_rate;

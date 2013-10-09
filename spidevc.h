@@ -20,6 +20,9 @@
 #define SPIDEVC_H
 
 /* Initialize SPI using this function */
+
+extern int spi_speed;
+
 int  spi_fd();
 void spi_init(void);
 

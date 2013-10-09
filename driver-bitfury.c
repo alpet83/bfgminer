@@ -282,8 +282,9 @@ void init_devices (bitfury_device_t *devices, int chip_count) {
             dev->osc6_bits = 53;
             if (!dev->osc6_bits_upd) dev->osc6_bits_upd = 53;
 #else
-            dev->osc6_bits = 54;
             if (!dev->osc6_bits_upd) dev->osc6_bits_upd = 54; // если не задано через опции командной строки
+            dev->osc6_bits = dev->osc6_bits_upd;
+
 #endif
 
 #ifndef BITFURY_AUTOCLOCK
@@ -749,7 +750,7 @@ void dump_lines(char *buff) {
     }
 }
 
-void dump_chip_eff (bitfury_device_p dev, int ridx) {
+void  dump_chip_eff (bitfury_device_p dev, int ridx) {
     short *stat = dev->big_stat[ridx];
     float median = 0;
     float count = 0;
@@ -790,7 +791,7 @@ void dump_chip_eff (bitfury_device_p dev, int ridx) {
     buff [0] = 0; // prepare for histogram
     dump_histogram ( stat, buff, 16384 );
     fprintf(f, "%s", buff);
-    fprintf(f, "osc6_bits = %d, eff_speed = %.2f Gh/s, hw_rate = %.1f%% \n", BASE_OSC_BITS + ridx, dev->eff_speed, dev->hw_rate);
+    fprintf(f, "osc6_bits = %d, eff_speed = %.2f Gh/s, hw_rate = %.1f%%, recovers = %d\n", BASE_OSC_BITS + ridx, dev->eff_speed, dev->hw_rate, dev->recovers);
     fclose(f);
 #endif
 
@@ -1054,9 +1055,10 @@ void check_not_hang(bitfury_device_p dev, double speed) {
     // сброс чипа по совсем уж малому хэшрейту или подвисанию 120s
     if ( 3 < dev->alerts || work_time > 1.2e8 ) {
         recovers ++;
+        dev->recovers ++;
         printf(CL_LT_RED);
-        applog(LOG_WARNING, "Slot %X chip %X, work_time = %.0f ms, FREQ CHANGE-RESTORE, osc6_bits = %d, total recovers = %d",
-                                dev->slot, dev->fasync, work_time * 0.001, dev->osc6_bits, recovers);
+        applog(LOG_WARNING, "Slot %X chip %X, work_time = %.0f ms, FREQ CHANGE-RESTORE, osc6_bits = %d, chip recovers = %d, total recovers = %d",
+                                dev->slot, dev->fasync, work_time * 0.001, dev->osc6_bits, dev->recovers, recovers);
         printf(CL_RESET);
         send_shutdown(dev->slot, dev->fasync);
         nmsleep(100);

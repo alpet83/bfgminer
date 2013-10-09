@@ -416,6 +416,8 @@ int libbitfury_detectChips(struct bitfury_device *devices) {
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
 
+    spi_speed = 2000000;
+
 	return n;
 }
 
@@ -889,7 +891,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
             tm_i2c_clear_oe(last_slot[0]);
         else
             new_loop = true; // новый цикл пошел вродь как
-        // nmsleep(2);
+        nmsleep(1);
         // nusleep(85);
         tm_i2c_set_oe(slot);
         last_slot[0] = slot;
@@ -907,7 +909,7 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
 #if 1
     if ( 1 == scan_loop ) {
         // распределение заданий равномерно в течении цикла
-        nmsleep(30);
+        nmsleep(7);
     }
 #endif
 
