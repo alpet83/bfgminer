@@ -332,6 +332,14 @@ static const char *JSON_PARAMETER = "parameter";
 
 #define MSG_DEVSCAN 0x100
 
+#ifdef USE_BITFURY
+#define MSG_OSCBITSRANGE 116
+#define MSG_CHIPRANGE 117
+#define MSG_SETOSCBITS 118
+#define MSG_SETOSCBITS_NOPAR 119
+#define MSG_DEBUG 120
+#endif
+
 enum code_severity {
 	SEVERITY_ERR,
 	SEVERITY_WARN,
@@ -346,6 +354,7 @@ enum code_parameters {
 	PARAM_PGA,
 	PARAM_CPU,
 	PARAM_PID,
+	PARAM_INT,
 	PARAM_GPUMAX,
 	PARAM_PGAMAX,
 	PARAM_CPUMAX,
@@ -509,6 +518,13 @@ struct CODES {
  { SEVERITY_SUCC,  MSG_PGASETOK, PARAM_BOTH,	"PGA %d set OK" },
  { SEVERITY_ERR,   MSG_PGASETERR, PARAM_BOTH,	"PGA %d set failed: %s" },
 #endif
+#ifdef USE_BITFURY
+ { SEVERITY_ERR,   MSG_OSCBITSRANGE, PARAM_NONE,  "Clock-bit range error (must be in range 52-56)" },
+ { SEVERITY_ERR,   MSG_OSCBITSRANGE, PARAM_INT,   "Chip index range error (%d chips max)" },
+ { SEVERITY_SUCC,  MSG_SETOSCBITS, PARAM_INT,     "Clock-bit set to %d" },
+ { SEVERITY_ERR,   MSG_SETOSCBITS_NOPAR, PARAM_NONE,   "Parameter required (<slot>:<chip>:<bits>)" },
+ { SEVERITY_ERR,   MSG_DEBUG,	PARAM_STR,	"Received string '%s'" },
+#endif
  { SEVERITY_ERR,   MSG_ZERMIS,	PARAM_NONE,	"Missing zero parameters" },
  { SEVERITY_ERR,   MSG_ZERINV,	PARAM_STR,	"Invalid zero parameter '%s'" },
  { SEVERITY_SUCC,  MSG_ZERSUM,	PARAM_STR,	"Zeroed %s stats with summary" },
@@ -559,6 +575,10 @@ extern struct device_drv opencl_api;
 
 #ifdef WANT_CPUMINE
 extern struct device_drv cpu_drv;
+#endif
+
+#ifdef USE_BITFURY
+extern struct device_drv bitfury_drv;
 #endif
 
 struct io_data {
@@ -1193,6 +1213,7 @@ static void message(struct io_data *io_data, int messageid, int paramid, char *p
 				case PARAM_PGA:
 				case PARAM_CPU:
 				case PARAM_PID:
+				case PARAM_INT:
 					sprintf(buf, codes[i].description, paramid);
 					break;
 				case PARAM_POOL:
@@ -3229,6 +3250,131 @@ static void dozero(struct io_data *io_data, __maybe_unused SOCKETTYPE c, char *p
 		message(io_data, MSG_ZERNOSUM, 0, all ? "All" : "BestShare", isjson);
 }
 
+#ifdef USE_BITFURY
+static bool chipdetails(char *param, char **slot_idx, char **chip_idx, char **osc_bits)
+{
+	char *ptr, *buf;
+
+	ptr = buf = malloc(strlen(param)+1);
+	if (unlikely(!buf))
+		quit(1, "Failed to malloc chipdetails buf");
+
+	*slot_idx = buf;
+
+	// copy 1st parameter
+	copyadvanceafter(':', &param, &buf);
+
+	if (!(*param)) // missing 2nd parameter
+		goto exitcd;
+
+	*chip_idx = buf;
+
+	// copy 2nd parameter
+	copyadvanceafter(':', &param, &buf);
+
+	if (!*param) // missing 3rd parameter
+		goto exitcd;
+
+	*osc_bits = buf;
+
+	// copy 3rd parameter
+	copyadvanceafter(':', &param, &buf);
+
+	return true;
+
+exitcd:
+	free(ptr);
+	return false;
+}
+
+static void set_clock_bits(struct io_data *io_data, __maybe_unused SOCKETTYPE c, char *param, bool isjson, __maybe_unused char group)
+{
+    struct cgpu_info *cgpu;
+    static struct bitfury_device *devices;
+    int value;
+    int slot_idx;
+    int chip_idx;
+    int osc_bits;
+    char *ts = NULL;
+    char *tc = NULL;
+    char *to = NULL;
+    char *ptr;
+    int i, k = 0;
+    int chip;
+
+    if(param == NULL) {
+	message(io_data, MSG_SETOSCBITS_NOPAR, 0, NULL, isjson);
+	return;
+    }
+//    else {
+//	message(io_data, MSG_DEBUG, 0, param, isjson);
+//	return;
+//    }
+	if (!chipdetails(param, &ts, &tc, &to)) {
+		ptr = escape_string(param, isjson);
+		message(io_data, MSG_DEBUG, 0, ptr, isjson);
+		if (ptr != param)
+			free(ptr);
+		ptr = NULL;
+		return;
+	}
+
+//    while (param[i] != '\0') {
+//	i++;
+//	if (param[i] != ':') continue;
+//	tc = param+i+1;
+//	param[i] = 0;
+//	k = 0;
+//	while (tc[k] != '\0') {
+//	    k++;
+//	    if (tc[k] != ':') continue;
+//	    to = tc+k+1;
+//	    tc[k] = '\0';
+//	    break;
+//	}
+//	break;
+//    }
+
+//    if (!tc || !to) {
+//	message(io_data, MSG_DEBUG, 0, tc, isjson);
+//	return;
+//    }
+
+    slot_idx = atoi(ts);
+    chip_idx = atoi(tc);
+    osc_bits = atoi(to);
+
+    if (osc_bits < 52 || osc_bits > 56) {
+	message(io_data, MSG_OSCBITSRANGE, 0, NULL, isjson);
+	return;
+    }
+
+    cgpu = get_devices(0);
+    devices = cgpu->devices;
+    int index = -1;
+    i = 0;
+    for (; i < cgpu->chip_count; i++) {
+	if ( (devices[i].slot == slot_idx) && (devices[i].fasync == chip_idx) ) {
+	    index = i;
+	    break;
+	}
+    }
+    if (index < 0 || index >= cgpu->chip_count) {
+	message(io_data, MSG_CHIPRANGE, (int) cgpu->chip_count, NULL, isjson);
+	return;
+    }
+    value = (unsigned int)devices[index].osc6_bits;
+    devices[index].osc6_bits_upd = osc_bits;
+
+//    chip = bitfury_findChip(cgpu->devices, cgpu->chip_count, slot_idx, chip_idx);
+    
+//    if (chip > 0 || chip < cgpu->chip_count)
+//	bitfury_setChipClk(cgpu->devices, cgpu->chip_count, slot_idx, chip_idx, osc_bits);
+
+    message(io_data, MSG_SETOSCBITS, osc_bits, NULL, isjson);
+}
+#endif
+
 static void checkcommand(struct io_data *io_data, __maybe_unused SOCKETTYPE c, char *param, bool isjson, char group);
 
 struct CMDS {
@@ -3293,6 +3439,9 @@ struct CMDS {
 	{ "pgaset",		pgaset,		true },
 #endif
 	{ "zero",		dozero,		true },
+#ifdef USE_BITFURY
+        { "setclk",		set_clock_bits, false },
+#endif
 	{ NULL,			NULL,		false }
 };
 

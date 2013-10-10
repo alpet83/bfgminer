@@ -216,6 +216,9 @@ char *opt_avalon_options = NULL;
 #endif
 #ifdef USE_BITFURY
 char *opt_bitfury_clockbits = NULL;
+bool opt_bitfury_autoclock = false;
+bool opt_bitfury_chipstat = false;
+int spi_clock = 4000000;
 #endif
 
 char *opt_kernel_path;
@@ -1577,6 +1580,15 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--bitfury-clockbits",
 		     set_bitfury_clockbits, NULL, NULL,
 		     "Set bitfury clockbits options chip:bits,chip:bits,..."),
+	OPT_WITH_ARG("--bitfury-spiclock",
+		    opt_set_intval, opt_show_intval, &spi_clock,
+		    "Set bitfury device SPI clock"),
+	OPT_WITHOUT_ARG("--bitfury-autoclock",
+		    opt_set_bool, &opt_bitfury_autoclock,
+		    "Enable experimental autoclock"),
+	OPT_WITHOUT_ARG("--bitfury-chipstat",
+		    opt_set_bool, &opt_bitfury_chipstat,
+		    "Enable per chip statistics in /var/log/bitfury"),
 #endif
 
 	OPT_WITHOUT_ARG("--load-balance",

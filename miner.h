@@ -932,6 +932,9 @@ extern char *opt_avalon_options;
 
 #ifdef USE_BITFURY
 extern char *opt_bitfury_clockbits;
+extern bool opt_bitfury_autoclock;
+extern bool opt_bitfury_chipstat;
+extern int spi_clock;
 #endif
 
 #ifdef USE_BITFORCE

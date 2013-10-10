@@ -763,7 +763,8 @@ void  dump_chip_eff (bitfury_device_p dev, int ridx) {
 
     if (count > 0) dev->eff_speed = median / count;
 
-#ifdef BITFURY_CHIP_STAT
+//#ifdef BITFURY_CHIP_STAT
+if (opt_bitfury_chipstat) {
     char buff[16384];
     // get_datestamp ( buff, 100, get_cgtime() );
     format_time ( NULL, buff );
@@ -793,7 +794,8 @@ void  dump_chip_eff (bitfury_device_p dev, int ridx) {
     fprintf(f, "%s", buff);
     fprintf(f, "osc6_bits = %d, eff_speed = %.2f Gh/s, hw_rate = %.1f%%, recovers = %d\n", BASE_OSC_BITS + ridx, dev->eff_speed, dev->hw_rate, dev->recovers);
     fclose(f);
-#endif
+}
+//#endif
 
 }
 
@@ -1020,18 +1022,19 @@ double collect_chip_stats (bitfury_device_p dev, int loop) {
 void check_not_hang(bitfury_device_p dev, double speed) {
 
     static unsigned recovers = 0;
-#ifdef  BITFURY_AUTOCLOCK
-    if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
-    if ( dev->csw_back > 100 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
-        dev->fixed_clk = false;
-        dev->csw_count = 0;
-        printf(CL_LT_RED);
-        applog(LOG_WARNING, "#WARNING: Chip at %x x %x has low median hashrate, auto-clock reset ", dev->fasync, dev->slot );
-        printf(CL_RESET);
-        int i;
-        for (i = 0; i < 3; i ++) dev->rbc_stat[i] = 0; // затереть статистику, типа устарела
+    if (opt_bitfury_autoclock) {
+        if ( dev->csw_back > 50 && dev->eff_speed > 0 && dev->eff_speed < LOW_HASHRATE) dev->fixed_clk = false;
+        if ( dev->csw_back > 100 && speed > 1.0 && speed < LOW_HASHRATE && !dev->fixed_clk ) {
+            dev->fixed_clk = false;
+            dev->csw_count = 0;
+            printf(CL_LT_RED);
+            applog(LOG_WARNING, "#WARNING: Chip %x_%x has low median hashrate, auto-clock stats reset. osc6_bits = %2d, work_median = %.1f ms ",
+                                    dev->fasync, dev->slot, dev->osc6_bits, dev->work_median * 0.001 );
+            printf(CL_RESET);
+            int i;
+            for (i = 0; i < 3; i ++) dev->rbc_stat[i] = 0; // затереть статистику, типа устарела
+        }
     }
-#endif
 
     if (dev->testing) return;
 
@@ -1277,11 +1280,11 @@ static int64_t try_scanHash(thr_info_t *thr)
            bitfury_device_p dev = &devices[chip];
            double speed = collect_chip_stats  (dev, maskv);         // for (chip; chip < n-chip; chip++)
 
-#ifdef  BITFURY_AUTOCLOCK
+	if (opt_bitfury_autoclock) {
            // AUTOFREQ: переключение частоты осциллятора принудительно (в режиме брутфорс или выбора лучшего)
            if ( ( dev->alerts >= 3 || ( dev->csw_back > 80 && maskv == 15 ) ) && !dev->fixed_clk )
                 freq_bruteforce (dev);
-#endif
+	}
            gh[dev->slot][dev->fasync] = speed;
 
 
@@ -1515,7 +1518,7 @@ static void get_options(struct cgpu_info *cgpu)
     size_t max = 0;
     int i, slot, fs, bits, chip, def_bits;
 
-    int default_bits = BASE_OSC_BITS + 1;
+    int default_bits = BASE_OSC_BITS + 1; // 54
 
 #ifdef FAST_CLOCK1
     default_bits = 53;
@@ -1555,7 +1558,7 @@ static void get_options(struct cgpu_info *cgpu)
                     fs = atoi(colon);
                     bits = atoi(colon2);
                     chip = bitfury_findChip(cgpu->devices, cgpu->chip_count, slot, fs);
-                    if(chip > 0 && chip < cgpu->chip_count && bits >= 48 && bits <= 56) {
+                    if(chip >= 0 && chip < cgpu->chip_count && bits >= 48 && bits <= 56) {
                         cgpu->devices[chip].osc6_bits_upd = bits;
                         applog(LOG_INFO, "Set clockbits: slot=%d chip=%d bits=%d", slot, fs, bits);
                     }

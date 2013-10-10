@@ -51,6 +51,9 @@
 // 1100 0001 0110 1010 0101 1001 1110 0011
 // C16A59E3
 
+#define NORM_SPI_SPEED 4000000
+#define SAFE_SPI_SPEED 1000000
+
 unsigned char enaconf[4] = { 0xc1, 0x6a, 0x59, 0xe3 };
 unsigned char disconf[4] = { 0, 0, 0, 0 };
 
@@ -416,7 +419,7 @@ int libbitfury_detectChips(struct bitfury_device *devices) {
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
 
-    spi_speed = 2000000;
+    spi_speed = spi_clock;
 
 	return n;
 }
@@ -872,8 +875,11 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
 
 // #define HW_PROTECT
 
+    static int last_active_slot = -1;
+
     int chip = d->fasync;
     int slot = d->slot;
+    int ls = last_slot[0];
 
     char *txbuff = spi_gettxbuf();
     char *rxbuff = spi_getrxbuf();
@@ -882,27 +888,39 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
     int i;
     bool new_loop = false;
 
+
+
     // if (  !ask_planned (d) ) return;
 
 
-    if (slot != last_slot[0]) {
+    if (slot != ls) {
 
-        if ( last_slot[0] >= 0 )
-            tm_i2c_clear_oe(last_slot[0]);
-        else
-            new_loop = true; // новый цикл пошел вродь как
-        nmsleep(1);
+        if ( ls >= 0 )
+            tm_i2c_clear_oe(ls);
+
+        if ( last_active_slot > slot || last_active_slot < 0 )
+             new_loop = true; // новый цикл пошел вродь как, при итеративной смене слотов
+        // nmsleep(1);
         // nusleep(85);
-        tm_i2c_set_oe(slot);
-        last_slot[0] = slot;
+        tm_i2c_set_oe(slot);        
+        last_slot[0] = slot;        
 
         // nmsleep(53); // пробная пауза
+
     }
 
     if (new_loop) {
         scan_loop ++;
         nmsleep(1);
+        // if ( scan_loop > 0 && scan_loop < 100 ) applog(LOG_WARNING, "scan_loop = %3d, last_active_slot = %X, slot = %X ", scan_loop, last_active_slot, slot);
+
     }
+
+    last_active_slot = slot;
+    if (d->recovers)
+        spi_speed = SAFE_SPI_SPEED;
+    else
+        spi_speed = spi_clock; // optionally modified in command line
 
 
 
@@ -910,6 +928,14 @@ void libbitfury_sendHashOne(struct thr_info *thr, struct bitfury_device *d, int 
     if ( 1 == scan_loop ) {
         // распределение заданий равномерно в течении цикла
         nmsleep(7);
+    }
+#endif
+
+#ifdef BITFURE_ENFORCE_FREQ
+    // для первых 10 слотов желательно иногда принудительно выставлять частоту...
+    if ( (slot * 100) == (scan_loop % 1000) ) {
+        send_freq(slot, chip, d->osc6_bits);
+        if (0 == chip) applog(LOG_WARNING, "freq_update slot = %X, scan_loop = %d ", slot, scan_loop);
     }
 #endif
 
@@ -1059,7 +1085,6 @@ void libbitfury_sendHashData(struct thr_info *thr, struct bitfury_device *bf, in
     if (last_slot >= 0)
         tm_i2c_clear_oe(last_slot);
 
-    scan_loop = 1;
 	return;
 }
 

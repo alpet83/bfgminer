@@ -13,6 +13,7 @@
 // #define CGMINER_MOD
 
 // #define FAST_CLOCK1
+#define BITFURE_ENFORCE_FREQ
 
 // processing all chips every cycle (remains about 500ms)
 // #define BITFURY_HARD_LOAD
@@ -33,9 +34,11 @@ void format_time(timeval_p tv, char *datetime);
 #ifdef FAST_CLOCK1
         #define BASE_OSC_BITS 51
         #define LOW_HASHRATE 2.2
+        #define EXP_HASHRATE 3.0
 #else
         #define BASE_OSC_BITS 53
         #define LOW_HASHRATE 1.5
+        #define EXP_HASHRATE 2.5
 #endif
 
 
